@@ -127,7 +127,7 @@ jobs:
       # Cache includes WhiskyKit/.build for consistency with test job cache paths
       # (swift build creates artifacts there, xcodebuild uses DerivedData)
       - name: Cache SPM Dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
@@ -217,7 +217,7 @@ jobs:
           xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Cache SPM Dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
@@ -301,7 +301,7 @@ jobs:
       # Cache includes WhiskyKit/.build because swift build/test creates
       # build artifacts there (unlike xcodebuild which uses DerivedData)
       - name: Cache SPM Dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/*/SourcePackages

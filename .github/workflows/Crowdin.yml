@@ -41,7 +41,7 @@ jobs:
 
       - name: Checkout
         if: steps.check.outputs.configured == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Push to main → push new English source strings up to Crowdin.
       - name: Upload sources

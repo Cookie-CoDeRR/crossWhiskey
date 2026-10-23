@@ -176,7 +176,7 @@ final class GameCardSnapshotTests: XCTestCase {
         """
         try plistXML.write(to: versionPlistURL, atomically: true, encoding: .utf8)
 
-        let fixedDate = Date(timeIntervalSince1970: 1776902400) // 2026-04-23T00:00:00Z
+        let fixedDate = Date(timeIntervalSince1970: 1_776_902_400) // 2026-04-23T00:00:00Z
         let snapshot = try GameCardSnapshot.capture(
             bottle: targetBottle,
             date: fixedDate,

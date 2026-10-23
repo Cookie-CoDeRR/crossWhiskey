@@ -306,8 +306,8 @@ extension GameCardSnapshot {
             let fileMatches = pinURL.lastPathComponent.caseInsensitiveCompare(program) == .orderedSame
             let stem = pinURL.deletingPathExtension().lastPathComponent
             let stemMatches = stem.caseInsensitiveCompare(program) == .orderedSame
-            if (nameMatches || fileMatches || stemMatches)
-                && fileManager.fileExists(atPath: pinURL.path(percentEncoded: false)) {
+            if nameMatches || fileMatches || stemMatches,
+               fileManager.fileExists(atPath: pinURL.path(percentEncoded: false)) {
                 return pinURL
             }
         }
@@ -320,7 +320,8 @@ extension GameCardSnapshot {
             at: searchDir,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return nil }
+        )
+        else { return nil }
 
         let target = (program as NSString).lastPathComponent.lowercased()
         for case let fileURL as URL in enumerator where fileURL.lastPathComponent.lowercased() == target {
@@ -443,7 +444,7 @@ extension GameCardSnapshot {
 
         let effectiveBackend = programOverrides?.graphicsBackend ?? bottle.settings.graphicsBackend
         let effectiveSync = programOverrides?.enhancedSync ?? bottle.settings.enhancedSync
-        let syncString: String = switch effectiveSync {
+        let syncString = switch effectiveSync {
         case .none: "none"
         case .esync: "esync"
         case .msync: "msync"

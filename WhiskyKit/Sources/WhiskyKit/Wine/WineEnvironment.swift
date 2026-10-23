@@ -26,6 +26,12 @@ private let envLogger = Logger(subsystem: Bundle.whiskyBundleIdentifier, categor
 
 // swiftlint:disable cyclomatic_complexity
 extension Wine {
+    /// Non-sensitive keys allowed in the launch summary and environment snapshots.
+    public static let launchSummaryAllowedKeys: [String] = [
+        "DXVK_ASYNC", "DXVK_HUD", "WINEESYNC", "WINEMSYNC",
+        "D3DM_MTL4", "MTL_HUD_ENABLED", "WINED3DMETAL"
+    ]
+
     /// Construct an environment merging the bottle values with the given values
     /// using EnvironmentBuilder with 8-layer resolution.
     ///
@@ -412,10 +418,7 @@ extension Wine {
         }
 
         // Non-sensitive keys allowed in the launch summary
-        let allowedKeys = [
-            "DXVK_ASYNC", "DXVK_HUD", "WINEESYNC", "WINEMSYNC",
-            "D3DM_MTL4", "MTL_HUD_ENABLED", "WINED3DMETAL"
-        ]
+        let allowedKeys = Wine.launchSummaryAllowedKeys
         let safeEntries = allowedKeys.compactMap { key -> String? in
             guard let value = environment[key] else { return nil }
             return "\(key)=\(value)"

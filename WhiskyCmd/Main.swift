@@ -60,7 +60,8 @@ struct Whisky: AsyncParsableCommand {
             Games.self,
             Launch.self,
             Shortcut.self,
-            Shellenv.self
+            Shellenv.self,
+            GameCard.self
             /* Install.self,
              Uninstall.self */
         ]

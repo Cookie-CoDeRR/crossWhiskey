@@ -10,6 +10,7 @@
 		12DEDCF97DB77E9F6714B8F1 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 61747C7BF48347DA75C30397 /* Cocoa.framework */; };
 		160B41C4006351293AAEEF27 /* LauncherConfigSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D27C1F7764AE4F0AED2FD03D /* LauncherConfigSection.swift */; };
 		1A2B3C4D2E0107F000AABBCC /* TextTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4E2E0107F000AABBCC /* TextTable.swift */; };
+		1A2B3C4D2E0107F000AABBCD /* GameCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4E2E0107F000AABBCD /* GameCard.swift */; };
 		1A8BB6C8C6FC24E0837A3C59 /* CleanupConfigSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 407A01251379955919903C3F /* CleanupConfigSection.swift */; };
 		2E9E4AD3124BDF8D5238BE32 /* DPIConfigSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3735C5328F7A6ABD2D1248 /* DPIConfigSheetView.swift */; };
 		484A57DAD0A7634094236533 /* DiagnosticsPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8797408D60F55718DFC61664 /* DiagnosticsPickerSheet.swift */; };
@@ -206,6 +207,7 @@
 /* Begin PBXFileReference section */
 		000C327847E981AEF33EFB61 /* InputConfigSection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InputConfigSection.swift; sourceTree = "<group>"; };
 		1A2B3C4E2E0107F000AABBCC /* TextTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextTable.swift; sourceTree = "<group>"; };
+		1A2B3C4E2E0107F000AABBCD /* GameCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameCard.swift; sourceTree = "<group>"; };
 		1C3B8A506869998F3FE0FC74 /* WhiskyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhiskyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		258BF9104045ED48882E009D /* WineConfigSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WineConfigSection.swift; sourceTree = "<group>"; };
 		366E8BD2A51FD444160DFC10 /* LauncherDetection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LauncherDetection.swift; sourceTree = "<group>"; };
@@ -635,6 +637,7 @@
 			children = (
 				6E70A49A2A9A2197007799E9 /* Main.swift */,
 				1A2B3C4E2E0107F000AABBCC /* TextTable.swift */,
+				1A2B3C4E2E0107F000AABBCD /* GameCard.swift */,
 			);
 			path = WhiskyCmd;
 			sourceTree = "<group>";
@@ -1117,6 +1120,7 @@
 			files = (
 				6E70A49B2A9A2197007799E9 /* Main.swift in Sources */,
 				1A2B3C4D2E0107F000AABBCC /* TextTable.swift in Sources */,
+				1A2B3C4D2E0107F000AABBCD /* GameCard.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 //
 //  GameCardSnapshot.swift
 //  WhiskyKit
@@ -22,6 +23,7 @@ import Foundation
 public enum GameCardError: LocalizedError, Equatable, Sendable {
     case bottleNotFound(String)
     case programNotFound(String)
+    case programSettingsUnreadable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -29,6 +31,8 @@ public enum GameCardError: LocalizedError, Equatable, Sendable {
             "A bottle named \"\(bottle)\" doesn't exist."
         case let .programNotFound(program):
             "Program \"\(program)\" not found in bottle."
+        case let .programSettingsUnreadable(message):
+            "Program settings could not be read: \(message)"
         }
     }
 }
@@ -36,13 +40,58 @@ public enum GameCardError: LocalizedError, Equatable, Sendable {
 /// Host system and runtime environment metadata captured in a GameCard snapshot.
 public struct GameCardEnvironment: Codable, Equatable, Sendable {
     public let macOSVersion: String
-    public let wineVersion: String
+    /// The WhiskyWine runtime bundle version (e.g. 3.1.1), not the underlying Wine version.
+    public let runtimeVersion: String
+    public let dxvkVersion: String?
+    public let dxmtVersion: String?
     public let cpuArchitecture: String
 
-    public init(macOSVersion: String, wineVersion: String, cpuArchitecture: String) {
+    enum CodingKeys: String, CodingKey {
+        case macOSVersion
+        case runtimeVersion
+        case dxvkVersion
+        case dxmtVersion
+        case cpuArchitecture
+    }
+
+    public init(
+        macOSVersion: String,
+        runtimeVersion: String,
+        dxvkVersion: String? = nil,
+        dxmtVersion: String? = nil,
+        cpuArchitecture: String
+    ) {
         self.macOSVersion = macOSVersion
-        self.wineVersion = wineVersion
+        self.runtimeVersion = runtimeVersion
+        self.dxvkVersion = dxvkVersion
+        self.dxmtVersion = dxmtVersion
         self.cpuArchitecture = cpuArchitecture
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.macOSVersion = try container.decode(String.self, forKey: .macOSVersion)
+        self.runtimeVersion = try container.decode(String.self, forKey: .runtimeVersion)
+        self.dxvkVersion = try container.decodeIfPresent(String.self, forKey: .dxvkVersion)
+        self.dxmtVersion = try container.decodeIfPresent(String.self, forKey: .dxmtVersion)
+        self.cpuArchitecture = try container.decode(String.self, forKey: .cpuArchitecture)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(macOSVersion, forKey: .macOSVersion)
+        try container.encode(runtimeVersion, forKey: .runtimeVersion)
+        if let dxvkVersion {
+            try container.encode(dxvkVersion, forKey: .dxvkVersion)
+        } else {
+            try container.encodeNil(forKey: .dxvkVersion)
+        }
+        if let dxmtVersion {
+            try container.encode(dxmtVersion, forKey: .dxmtVersion)
+        } else {
+            try container.encodeNil(forKey: .dxmtVersion)
+        }
+        try container.encode(cpuArchitecture, forKey: .cpuArchitecture)
     }
 }
 
@@ -59,8 +108,11 @@ public struct GameCardSnapshot: Codable, Equatable, Sendable {
     public let avxEnabled: Bool
     public let metalFX: Bool
     public let sequoiaCompatMode: Bool
-    public let dllOverrides: [DLLOverrideEntry]
+    public let bottleDllOverrides: [DLLOverrideEntry]
+    public let programDllOverrides: [DLLOverrideEntry]
+    public let effectiveDllOverridesString: String?
     public let environmentVariables: [String: String]
+    public let programOverridesApplied: [String]
     public let collectedAt: String
     public let environment: GameCardEnvironment
     public let testResult: String?
@@ -77,8 +129,11 @@ public struct GameCardSnapshot: Codable, Equatable, Sendable {
         case avxEnabled
         case metalFX
         case sequoiaCompatMode
-        case dllOverrides
+        case bottleDllOverrides
+        case programDllOverrides
+        case effectiveDllOverridesString
         case environmentVariables
+        case programOverridesApplied
         case collectedAt
         case environment
         case testResult
@@ -96,14 +151,17 @@ public struct GameCardSnapshot: Codable, Equatable, Sendable {
         avxEnabled: Bool,
         metalFX: Bool,
         sequoiaCompatMode: Bool,
-        dllOverrides: [DLLOverrideEntry],
-        environmentVariables: [String: String],
+        bottleDllOverrides: [DLLOverrideEntry] = [],
+        programDllOverrides: [DLLOverrideEntry] = [],
+        effectiveDllOverridesString: String? = nil,
+        environmentVariables: [String: String] = [:],
+        programOverridesApplied: [String] = [],
         collectedAt: String,
         environment: GameCardEnvironment,
         testResult: String? = nil,
         rating: String? = nil,
         knownIssues: [String] = [],
-        notes: [String] = []
+        notes: [String] = ["Snapshot of settings only; no test was run."]
     ) {
         self.bottleName = bottleName
         self.program = program
@@ -113,8 +171,11 @@ public struct GameCardSnapshot: Codable, Equatable, Sendable {
         self.avxEnabled = avxEnabled
         self.metalFX = metalFX
         self.sequoiaCompatMode = sequoiaCompatMode
-        self.dllOverrides = dllOverrides
+        self.bottleDllOverrides = bottleDllOverrides
+        self.programDllOverrides = programDllOverrides
+        self.effectiveDllOverridesString = effectiveDllOverridesString
         self.environmentVariables = environmentVariables
+        self.programOverridesApplied = programOverridesApplied
         self.collectedAt = collectedAt
         self.environment = environment
         self.testResult = testResult
@@ -133,8 +194,13 @@ public struct GameCardSnapshot: Codable, Equatable, Sendable {
         self.avxEnabled = try container.decode(Bool.self, forKey: .avxEnabled)
         self.metalFX = try container.decode(Bool.self, forKey: .metalFX)
         self.sequoiaCompatMode = try container.decode(Bool.self, forKey: .sequoiaCompatMode)
-        self.dllOverrides = try container.decode([DLLOverrideEntry].self, forKey: .dllOverrides)
+        self.bottleDllOverrides = try container.decode([DLLOverrideEntry].self, forKey: .bottleDllOverrides)
+        self.programDllOverrides = try container.decode([DLLOverrideEntry].self, forKey: .programDllOverrides)
+        self.effectiveDllOverridesString = try container.decodeIfPresent(
+            String.self, forKey: .effectiveDllOverridesString
+        )
         self.environmentVariables = try container.decode([String: String].self, forKey: .environmentVariables)
+        self.programOverridesApplied = try container.decode([String].self, forKey: .programOverridesApplied)
         self.collectedAt = try container.decode(String.self, forKey: .collectedAt)
         self.environment = try container.decode(GameCardEnvironment.self, forKey: .environment)
         self.testResult = try container.decodeIfPresent(String.self, forKey: .testResult)
@@ -153,8 +219,15 @@ public struct GameCardSnapshot: Codable, Equatable, Sendable {
         try container.encode(avxEnabled, forKey: .avxEnabled)
         try container.encode(metalFX, forKey: .metalFX)
         try container.encode(sequoiaCompatMode, forKey: .sequoiaCompatMode)
-        try container.encode(dllOverrides, forKey: .dllOverrides)
+        try container.encode(bottleDllOverrides, forKey: .bottleDllOverrides)
+        try container.encode(programDllOverrides, forKey: .programDllOverrides)
+        if let effectiveDllOverridesString {
+            try container.encode(effectiveDllOverridesString, forKey: .effectiveDllOverridesString)
+        } else {
+            try container.encodeNil(forKey: .effectiveDllOverridesString)
+        }
         try container.encode(environmentVariables, forKey: .environmentVariables)
+        try container.encode(programOverridesApplied, forKey: .programOverridesApplied)
         try container.encode(collectedAt, forKey: .collectedAt)
         try container.encode(environment, forKey: .environment)
         if let testResult {
@@ -265,7 +338,7 @@ extension GameCardSnapshot {
     private static func loadProgramSettings(
         for url: URL,
         in bottle: Bottle
-    ) -> ProgramConfig {
+    ) throws -> ProgramConfig {
         let locations = Program.settingsLocations(
             for: url,
             bottleURL: bottle.url,
@@ -275,7 +348,16 @@ extension GameCardSnapshot {
             ? locations.identity
             : locations.legacy
 
-        guard let settings = try? ProgramSettings.decodeIfPresent(from: settingsURL) else {
+        let settings: ProgramSettings?
+        do {
+            settings = try ProgramSettings.decodeIfPresent(from: settingsURL)
+        } catch {
+            throw GameCardError.programSettingsUnreadable(
+                "Failed to decode program settings at \(settingsURL.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
+
+        guard let settings else {
             return ProgramConfig(settings: nil, overrides: nil, environment: [:])
         }
 
@@ -286,6 +368,33 @@ extension GameCardSnapshot {
         return ProgramConfig(settings: settings, overrides: settings.overrides, environment: env)
     }
 
+    private static func listAppliedOverrides(_ overrides: ProgramOverrides?) -> [String] {
+        guard let overrides else { return [] }
+        let checks: [(String, (ProgramOverrides) -> Bool)] = [
+            ("graphicsBackend", { $0.graphicsBackend != nil }),
+            ("dxvk", { $0.dxvk != nil }),
+            ("dxvkAsync", { $0.dxvkAsync != nil }),
+            ("dxvkHud", { $0.dxvkHud != nil }),
+            ("enhancedSync", { $0.enhancedSync != nil }),
+            ("metal4Enabled", { $0.metal4Enabled != nil }),
+            ("shaderCacheEnabled", { $0.shaderCacheEnabled != nil }),
+            ("controllerCompatibilityMode", { $0.controllerCompatibilityMode != nil }),
+            ("disableHIDAPI", { $0.disableHIDAPI != nil }),
+            ("allowBackgroundEvents", { $0.allowBackgroundEvents != nil }),
+            ("disableControllerMapping", { $0.disableControllerMapping != nil }),
+            ("useButtonLabels", { $0.useButtonLabels != nil }),
+            ("virtualDesktopEnabled", { $0.virtualDesktopEnabled != nil }),
+            ("resolutionPreset", { $0.resolutionPreset != nil }),
+            ("customResolutionWidth", { $0.customResolutionWidth != nil }),
+            ("customResolutionHeight", { $0.customResolutionHeight != nil }),
+            ("dllOverrides", { $0.dllOverrides != nil }),
+            ("taggedVerbs", { $0.taggedVerbs != nil })
+        ]
+        return checks.compactMap { name, isPresent in
+            isPresent(overrides) ? name : nil
+        }
+    }
+
     private static func formatISO8601UTC(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -294,15 +403,18 @@ extension GameCardSnapshot {
     }
 
     private static func resolveHostEnvironment(wineVersionPlistURL: URL?) -> GameCardEnvironment {
-        let wineVer: String = {
+        let info: WhiskyWineVersion? = {
             if let plistURL = wineVersionPlistURL {
-                return WhiskyWineInstaller.whiskyWineInfo(at: plistURL)?.version.description ?? "unknown"
+                return WhiskyWineInstaller.whiskyWineInfo(at: plistURL)
             }
-            return WhiskyWineInstaller.whiskyWineVersion()?.description ?? "unknown"
+            return WhiskyWineInstaller.whiskyWineInfo()
         }()
+        let runtimeVer = info?.version.description ?? "unknown"
         return GameCardEnvironment(
             macOSVersion: MacOSVersion.current.description,
-            wineVersion: wineVer,
+            runtimeVersion: runtimeVer,
+            dxvkVersion: info?.dxvkVersion,
+            dxmtVersion: info?.dxmtVersion,
             cpuArchitecture: HostArchitecture.isAppleSilicon ? "arm64" : "x86_64"
         )
     }
@@ -323,7 +435,7 @@ extension GameCardSnapshot {
             guard let url = resolveProgramURL(for: prog, in: bottle) else {
                 throw GameCardError.programNotFound(prog)
             }
-            let loaded = loadProgramSettings(for: url, in: bottle)
+            let loaded = try loadProgramSettings(for: url, in: bottle)
             programSettings = loaded.settings
             programOverrides = loaded.overrides
             programEnv = loaded.environment
@@ -344,13 +456,6 @@ extension GameCardSnapshot {
             programSettings: programSettings
         )
 
-        var filteredEnv: [String: String] = [:]
-        for key in Wine.launchSummaryAllowedKeys where resolvedEnv[key] != nil {
-            if let value = resolvedEnv[key] {
-                filteredEnv[key] = value
-            }
-        }
-
         return GameCardSnapshot(
             bottleName: bottle.settings.name,
             program: program,
@@ -360,11 +465,28 @@ extension GameCardSnapshot {
             avxEnabled: bottle.settings.avxEnabled,
             metalFX: bottle.settings.metalFX,
             sequoiaCompatMode: bottle.settings.sequoiaCompatMode,
-            dllOverrides: programOverrides?.dllOverrides ?? bottle.settings.dllOverrides,
-            environmentVariables: filteredEnv,
+            bottleDllOverrides: bottle.settings.dllOverrides,
+            programDllOverrides: programOverrides?.dllOverrides ?? [],
+            effectiveDllOverridesString: resolvedEnv["WINEDLLOVERRIDES"],
+            environmentVariables: filterAllowedEnvironment(resolvedEnv),
+            programOverridesApplied: listAppliedOverrides(programOverrides),
             collectedAt: formatISO8601UTC(date),
-            environment: resolveHostEnvironment(wineVersionPlistURL: wineVersionPlistURL)
+            environment: resolveHostEnvironment(wineVersionPlistURL: wineVersionPlistURL),
+            testResult: nil,
+            rating: nil,
+            knownIssues: [],
+            notes: ["Snapshot of settings only; no test was run."]
         )
+    }
+
+    private static func filterAllowedEnvironment(_ env: [String: String]) -> [String: String] {
+        var filtered: [String: String] = [:]
+        for key in Wine.launchSummaryAllowedKeys where env[key] != nil {
+            if let value = env[key] {
+                filtered[key] = value
+            }
+        }
+        return filtered
     }
 
     /// Captures the environment snapshot for a named bottle from a list of bottles.

@@ -22,8 +22,8 @@ import SemanticVersion
 import XCTest
 
 final class GameCardSnapshotTests: XCTestCase {
-    private var tempDir: URL?
-    private var bottleURL: URL?
+    var tempDir: URL?
+    var bottleURL: URL?
 
     override func setUp() {
         super.setUp()
@@ -46,7 +46,7 @@ final class GameCardSnapshotTests: XCTestCase {
     }
 
     @MainActor
-    private func makeFixtureBottle() throws -> Bottle {
+    func makeFixtureBottle() throws -> Bottle {
         let bURL = try XCTUnwrap(bottleURL)
         let testBottle = Bottle(bottleUrl: bURL)
         testBottle.settings.name = "TestBottle"
@@ -81,7 +81,11 @@ final class GameCardSnapshotTests: XCTestCase {
         XCTAssertFalse(decoded.avxEnabled)
         XCTAssertTrue(decoded.metalFX)
         XCTAssertTrue(decoded.sequoiaCompatMode)
+        XCTAssertTrue(decoded.bottleDllOverrides.isEmpty)
+        XCTAssertTrue(decoded.programDllOverrides.isEmpty)
+        XCTAssertTrue(decoded.programOverridesApplied.isEmpty)
         XCTAssertNil(decoded.program)
+        XCTAssertEqual(decoded.notes, ["Snapshot of settings only; no test was run."])
     }
 
     // MARK: - Test 2: Required keys are present in JSON output
@@ -107,8 +111,11 @@ final class GameCardSnapshotTests: XCTestCase {
             "avxEnabled",
             "metalFX",
             "sequoiaCompatMode",
-            "dllOverrides",
+            "bottleDllOverrides",
+            "programDllOverrides",
+            "effectiveDllOverridesString",
             "environmentVariables",
+            "programOverridesApplied",
             "collectedAt",
             "environment",
             "testResult",
@@ -121,7 +128,20 @@ final class GameCardSnapshotTests: XCTestCase {
             XCTAssertTrue(dict.keys.contains(key), "Missing required key: \(key)")
         }
 
+        XCTAssertFalse(dict.keys.contains("dllOverrides"), "Obsolete dllOverrides should not be in JSON")
         XCTAssertFalse(dict.keys.contains("program"), "Omitted program should not be in JSON")
+
+        // Environment key verification: runtimeVersion present, wineVersion absent
+        guard let envDict = dict["environment"] as? [String: Any] else {
+            XCTFail("Missing environment dictionary in JSON")
+            return
+        }
+        XCTAssertTrue(envDict.keys.contains("runtimeVersion"), "environment should contain runtimeVersion")
+        XCTAssertFalse(envDict.keys.contains("wineVersion"), "environment should not contain wineVersion")
+        XCTAssertTrue(envDict.keys.contains("macOSVersion"), "environment should contain macOSVersion")
+        XCTAssertTrue(envDict.keys.contains("cpuArchitecture"), "environment should contain cpuArchitecture")
+        XCTAssertTrue(envDict.keys.contains("dxvkVersion"), "environment should contain dxvkVersion")
+        XCTAssertTrue(envDict.keys.contains("dxmtVersion"), "environment should contain dxmtVersion")
     }
 
     // MARK: - Test 3: collectedAt and environment fields are populated
@@ -138,6 +158,10 @@ final class GameCardSnapshotTests: XCTestCase {
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
+            <key>dxmtVersion</key>
+            <string>0.80</string>
+            <key>dxvkVersion</key>
+            <string>1.10.3</string>
             <key>version</key>
             <dict>
                 <key>major</key>
@@ -160,14 +184,16 @@ final class GameCardSnapshotTests: XCTestCase {
         )
 
         XCTAssertEqual(snapshot.collectedAt, "2026-04-23T00:00:00Z")
-        XCTAssertEqual(snapshot.environment.wineVersion, "3.1.1")
+        XCTAssertEqual(snapshot.environment.runtimeVersion, "3.1.1")
+        XCTAssertEqual(snapshot.environment.dxvkVersion, "1.10.3")
+        XCTAssertEqual(snapshot.environment.dxmtVersion, "0.80")
         XCTAssertEqual(snapshot.environment.macOSVersion, MacOSVersion.current.description)
         XCTAssertTrue(
             snapshot.environment.cpuArchitecture == "arm64" || snapshot.environment.cpuArchitecture == "x86_64"
         )
     }
 
-    // MARK: - Test 4: testResult and rating are null, notes and knownIssues are empty
+    // MARK: - Test 4: testResult and rating are null, notes has settings snapshot note
 
     @MainActor
     func testNullAndEmptyFieldsInJSON() throws {
@@ -191,18 +217,23 @@ final class GameCardSnapshotTests: XCTestCase {
             XCTFail("knownIssues should be an array")
         }
 
-        if let notes = dict["notes"] as? [Any] {
-            XCTAssertTrue(notes.isEmpty, "notes should be empty")
+        if let notes = dict["notes"] as? [String] {
+            XCTAssertEqual(notes, ["Snapshot of settings only; no test was run."])
         } else {
-            XCTFail("notes should be an array")
+            XCTFail("notes should be an array of strings")
         }
     }
+}
 
+// MARK: - Program Overrides and Error Handling Tests
+
+extension GameCardSnapshotTests {
     // MARK: - Test 5: Program snapshot with overrides applied
 
     @MainActor
     func testProgramSnapshotWithOverrides() throws {
         let targetBottle = try makeFixtureBottle()
+        targetBottle.settings.dllOverrides = [DLLOverrideEntry(dllName: "d3dcompiler_43", mode: .builtin)]
         let bURL = try XCTUnwrap(bottleURL)
 
         // Create program binary in bottle
@@ -216,6 +247,7 @@ final class GameCardSnapshotTests: XCTestCase {
         var overrides = ProgramOverrides()
         overrides.graphicsBackend = .d3dMetal
         overrides.enhancedSync = .esync
+        overrides.metal4Enabled = true
         overrides.dllOverrides = [DLLOverrideEntry(dllName: "d3dcompiler_47", mode: .native)]
         programSettings.overrides = overrides
 
@@ -231,8 +263,21 @@ final class GameCardSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.program, "C:\\windows\\notepad.exe")
         XCTAssertEqual(snapshot.graphicsBackend, "d3dMetal")
         XCTAssertEqual(snapshot.enhancedSync, "esync")
-        XCTAssertEqual(snapshot.dllOverrides.count, 1)
-        XCTAssertEqual(snapshot.dllOverrides.first?.dllName, "d3dcompiler_47")
+
+        // Split DLL overrides assertions
+        XCTAssertEqual(snapshot.bottleDllOverrides, [DLLOverrideEntry(dllName: "d3dcompiler_43", mode: .builtin)])
+        XCTAssertEqual(snapshot.programDllOverrides, [DLLOverrideEntry(dllName: "d3dcompiler_47", mode: .native)])
+
+        // Effective DLL overrides string contains both
+        let effectiveDLLs = try XCTUnwrap(snapshot.effectiveDllOverridesString)
+        XCTAssertTrue(effectiveDLLs.contains("d3dcompiler_43"), "Should contain bottle DLL override")
+        XCTAssertTrue(effectiveDLLs.contains("d3dcompiler_47"), "Should contain program DLL override")
+
+        // programOverridesApplied list
+        XCTAssertTrue(snapshot.programOverridesApplied.contains("graphicsBackend"))
+        XCTAssertTrue(snapshot.programOverridesApplied.contains("enhancedSync"))
+        XCTAssertTrue(snapshot.programOverridesApplied.contains("metal4Enabled"))
+        XCTAssertTrue(snapshot.programOverridesApplied.contains("dllOverrides"))
 
         let json = try snapshot.jsonString()
         guard let data = json.data(using: .utf8),
@@ -284,6 +329,40 @@ final class GameCardSnapshotTests: XCTestCase {
 
         for key in snapshot.environmentVariables.keys {
             XCTAssertTrue(allowed.contains(key), "Key '\(key)' is not in allowlisted subset")
+        }
+    }
+
+    // MARK: - Test 9: Corrupt program settings throws programSettingsUnreadable
+
+    @MainActor
+    func testCorruptProgramSettingsThrowsError() throws {
+        let targetBottle = try makeFixtureBottle()
+        let bURL = try XCTUnwrap(bottleURL)
+
+        let windowsDir = bURL.appending(path: "drive_c").appending(path: "windows")
+        try FileManager.default.createDirectory(at: windowsDir, withIntermediateDirectories: true)
+        let exeURL = windowsDir.appending(path: "corrupt.exe")
+        try Data().write(to: exeURL)
+
+        let locations = Program.settingsLocations(for: exeURL, bottleURL: bURL, legacyName: "corrupt.exe")
+        try FileManager.default.createDirectory(
+            at: locations.identity.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("NOT_A_VALID_PLIST_DATA".utf8).write(to: locations.identity)
+
+        let progPath = "C:\\windows\\corrupt.exe"
+        XCTAssertThrowsError(try GameCardSnapshot.capture(bottle: targetBottle, program: progPath)) { error in
+            guard let cardError = error as? GameCardError else {
+                XCTFail("Expected GameCardError, got \(error)")
+                return
+            }
+            switch cardError {
+            case .programSettingsUnreadable:
+                break
+            default:
+                XCTFail("Expected .programSettingsUnreadable, got \(cardError)")
+            }
         }
     }
 }

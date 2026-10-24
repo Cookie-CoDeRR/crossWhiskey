@@ -55,6 +55,41 @@ public protocol SteamClientDriver: AnyObject {
     /// The orchestrator is being stopped; release anything started in
     /// ``clientDidBecomeReady()``.
     func shutdown()
+
+    /// Whether this driver can carry an opt-in session diagnostics preset
+    /// into the client it starts. Checked before any diagnostic launch, so a
+    /// driver that cannot carry one fails the launch instead of ignoring it.
+    var supportsSessionDiagnostics: Bool { get }
+
+    /// The diagnostics-carrying variant of ``startClient(steamExe:)``.
+    func startClient(steamExe: URL, diagnosticsPreset: WineDebugPreset?)
+
+    /// The diagnostics-carrying variant of ``launchGame(_:)``.
+    func launchGame(_ game: SteamGame, diagnosticsPreset: WineDebugPreset?) throws
+}
+
+/// Fail-closed defaults for the diagnostic requirements.
+///
+/// A driver written before these requirements existed keeps compiling, and a
+/// `nil` preset reaches the original methods unchanged - exactly today's
+/// behavior. A non-`nil` preset is never silently dropped: the client simply
+/// is not started, and a launch is refused with
+/// ``SteamLaunchError/diagnosticsUnsupported``. ``WineSteamClientDriver``
+/// overrides all three to actually carry the preset.
+public extension SteamClientDriver {
+    var supportsSessionDiagnostics: Bool { false }
+
+    func startClient(steamExe: URL, diagnosticsPreset: WineDebugPreset?) {
+        guard diagnosticsPreset == nil else { return }
+        startClient(steamExe: steamExe)
+    }
+
+    func launchGame(_ game: SteamGame, diagnosticsPreset: WineDebugPreset?) throws {
+        guard diagnosticsPreset == nil else {
+            throw SteamLaunchError.diagnosticsUnsupported
+        }
+        try launchGame(game)
+    }
 }
 
 /// The production driver: Wine, `tasklist.exe`, `ps`, and ``SteamLauncher``.
@@ -115,6 +150,16 @@ open class WineSteamClientDriver: SteamClientDriver {
         SteamLauncher.startClient(steamExe: steamExe, bottle: bottle)
     }
 
+    /// This driver carries diagnostics presets through ``SteamLauncher``.
+    open var supportsSessionDiagnostics: Bool { true }
+
+    /// The diagnostics-carrying variant: the preset rides the client's
+    /// launch environment, which the client's children are expected (not
+    /// verified) to inherit.
+    open func startClient(steamExe: URL, diagnosticsPreset: WineDebugPreset?) {
+        SteamLauncher.startClient(steamExe: steamExe, bottle: bottle, diagnosticsPreset: diagnosticsPreset)
+    }
+
     /// Through the shared path, which carries the locale, DXVK and
     /// GPU-spoofing settings steamwebhelper needs and not just the compat flag.
     open func applyLauncherFixes() {
@@ -129,6 +174,17 @@ open class WineSteamClientDriver: SteamClientDriver {
         // The orchestrator has started the client or found it running already.
         _ = try SteamLauncher.launch(
             appId: game.appId, bottle: bottle, installURL: game.installURL, clientIsRunning: true
+        )
+    }
+
+    /// The diagnostics-carrying variant. The orchestrator has already started
+    /// the client with this preset (or refused the session), so the launch
+    /// passes `clientIsRunning: true`; the preset is still forwarded so the
+    /// `-applaunch` run is marked with it as well.
+    open func launchGame(_ game: SteamGame, diagnosticsPreset: WineDebugPreset?) throws {
+        _ = try SteamLauncher.launch(
+            appId: game.appId, bottle: bottle, installURL: game.installURL,
+            clientIsRunning: true, diagnosticsPreset: diagnosticsPreset
         )
     }
 

@@ -33,6 +33,9 @@ final class FakeSteamClientDriver: SteamClientDriver {
     var onStartClient: (() -> Void)?
     var onLaunchGame: ((SteamGame) -> Void)?
     var launchFailure: Error?
+    /// What the fake reports for ``supportsSessionDiagnostics``. `true` so
+    /// diagnostics tests exercise the carrying path by default.
+    var diagnosticsSupported = true
 
     private(set) var listCalls = 0
     private(set) var hostCalls = 0
@@ -42,6 +45,10 @@ final class FakeSteamClientDriver: SteamClientDriver {
     private(set) var killed: [Int32] = []
     private(set) var readyCalls = 0
     private(set) var shutdownCalls = 0
+    /// The preset each diagnostics-carrying `startClient` call received.
+    private(set) var startClientPresets: [WineDebugPreset?] = []
+    /// The preset each diagnostics-carrying `launchGame` call received.
+    private(set) var launchPresets: [WineDebugPreset?] = []
 
     init(script: [[String]]) {
         self.script = script
@@ -94,6 +101,22 @@ final class FakeSteamClientDriver: SteamClientDriver {
 
     func shutdown() {
         shutdownCalls += 1
+    }
+
+    var supportsSessionDiagnostics: Bool { diagnosticsSupported }
+
+    /// Records the preset, then routes `nil` into the legacy method so the
+    /// pre-diagnostics assertions (`startClientCalls`) still describe it.
+    func startClient(steamExe: URL, diagnosticsPreset: WineDebugPreset?) {
+        startClientPresets.append(diagnosticsPreset)
+        startClient(steamExe: steamExe)
+    }
+
+    /// Records the preset, then routes `nil` into the legacy method so the
+    /// pre-diagnostics assertions (`launched`) still describe it.
+    func launchGame(_ game: SteamGame, diagnosticsPreset: WineDebugPreset?) throws {
+        launchPresets.append(diagnosticsPreset)
+        try launchGame(game)
     }
 }
 

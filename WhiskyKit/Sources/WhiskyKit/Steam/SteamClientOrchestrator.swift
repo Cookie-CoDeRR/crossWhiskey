@@ -86,6 +86,19 @@ public final class SteamClientOrchestrator: ObservableObject {
         }
     }
 
+    /// Opt-in session diagnostics, applied to every launch until cleared.
+    ///
+    /// Transient by lifetime: the value lives on this orchestrator (owned by
+    /// a view) and is never written to bottle, program, or app settings.
+    /// Read once at launch request time; a change made while a launch is in
+    /// flight applies to the NEXT launch, so one session can never split
+    /// across two presets. Default `nil` is exactly today's behavior. When set, a launch is
+    /// refused with ``SteamLaunchError/diagnosticsRequiresClientRestart`` if
+    /// the client is already running (its environment was fixed at start) or
+    /// with ``SteamLaunchError/diagnosticsUnsupported`` if the driver cannot
+    /// carry a preset.
+    public var diagnosticsPreset: WineDebugPreset?
+
     /// Where each in-flight launch is, keyed by App ID.
     @Published public private(set) var phases: [Int: Phase] = [:]
     /// App IDs whose executables are currently in the bottle's process list.
@@ -100,6 +113,11 @@ public final class SteamClientOrchestrator: ObservableObject {
     private var executableNamesByAppId: [Int: Set<String>] = [:]
     /// The in-flight client startup, shared by every concurrent launch.
     private var clientStartup: Task<Void, Error>?
+    /// The preset the in-flight client startup was begun with. A launch
+    /// asking for a different preset must not reuse that startup: the client
+    /// would come up without its preset and the session would be
+    /// misattributed.
+    private var clientStartupPreset: WineDebugPreset?
     private var launchTasks: [Int: Task<Void, Never>] = [:]
     var processSnapshot: (processes: [WineProcess], taken: Date)?
     var snapshotRead: Task<[WineProcess], Never>?
@@ -125,7 +143,12 @@ public final class SteamClientOrchestrator: ObservableObject {
     public func launch(_ game: SteamGame) {
         guard phases[game.appId] == nil else { return }
         phases[game.appId] = .startingClient
-        launchTasks[game.appId] = Task { await performLaunch(game) }
+        // Snapshot the opt-in at REQUEST time, before the launch's first
+        // await: the gate, the client start, and the `-applaunch` all carry
+        // this same immutable value, so a change made while the launch is in
+        // flight applies to the next launch and can never split a session.
+        let presetAtLaunch = diagnosticsPreset
+        launchTasks[game.appId] = Task { await performLaunch(game, diagnosticsPreset: presetAtLaunch) }
     }
 
     /// Polls the bottle's process list so the library can show which games
@@ -185,7 +208,7 @@ public final class SteamClientOrchestrator: ObservableObject {
 
     // MARK: - Launch sequence
 
-    private func performLaunch(_ game: SteamGame) async {
+    private func performLaunch(_ game: SteamGame, diagnosticsPreset presetAtLaunch: WineDebugPreset?) async {
         defer {
             phases[game.appId] = nil
             launchTasks[game.appId] = nil
@@ -198,7 +221,7 @@ public final class SteamClientOrchestrator: ObservableObject {
         let steamExe = steamRoot.appending(path: "steam.exe")
 
         do {
-            try await ensureClientRunning(steamExe: steamExe)
+            try await ensureClientRunning(steamExe: steamExe, diagnosticsPreset: presetAtLaunch)
         } catch {
             launchError = error.localizedDescription
             return
@@ -206,7 +229,7 @@ public final class SteamClientOrchestrator: ObservableObject {
 
         phases[game.appId] = .launching
         do {
-            try driver.launchGame(game)
+            try driver.launchGame(game, diagnosticsPreset: presetAtLaunch)
         } catch {
             launchError = error.localizedDescription
             return
@@ -217,18 +240,37 @@ public final class SteamClientOrchestrator: ObservableObject {
         }
     }
 
-    private func ensureClientRunning(steamExe: URL) async throws {
+    private func ensureClientRunning(steamExe: URL, diagnosticsPreset: WineDebugPreset?) async throws {
         if let clientStartup {
+            guard clientStartupPreset == diagnosticsPreset else {
+                throw SteamLaunchError.diagnosticsRequiresClientRestart
+            }
             return try await clientStartup.value
         }
-        let startup = Task { try await startClient(steamExe: steamExe) }
+        clientStartupPreset = diagnosticsPreset
+        let startup = Task { try await startClient(steamExe: steamExe, diagnosticsPreset: diagnosticsPreset) }
         clientStartup = startup
-        defer { clientStartup = nil }
+        defer {
+            clientStartup = nil
+            clientStartupPreset = nil
+        }
         try await startup.value
     }
 
-    private func startClient(steamExe: URL) async throws {
-        if await isClientRunning() {
+    private func startClient(steamExe: URL, diagnosticsPreset: WineDebugPreset?) async throws {
+        let clientUp = await isClientRunning()
+        switch SteamSessionDiagnostics.gate(
+            preset: diagnosticsPreset, clientIsRunning: clientUp,
+            driverSupportsDiagnostics: driver.supportsSessionDiagnostics
+        ) {
+        case .proceed:
+            break
+        case .blockedClientRunning:
+            throw SteamLaunchError.diagnosticsRequiresClientRestart
+        case .blockedDriverUnsupported:
+            throw SteamLaunchError.diagnosticsUnsupported
+        }
+        if clientUp {
             driver.clientDidBecomeReady()
             return
         }
@@ -236,7 +278,7 @@ public final class SteamClientOrchestrator: ObservableObject {
         if Self.shouldApplyLauncherFixes(settings: bottle.settings) {
             driver.applyLauncherFixes()
         }
-        driver.startClient(steamExe: steamExe)
+        driver.startClient(steamExe: steamExe, diagnosticsPreset: diagnosticsPreset)
 
         if await watch.waitForAny(of: ["steam.exe"], timeout: timing.clientReadyTimeout) {
             driver.clientDidBecomeReady()

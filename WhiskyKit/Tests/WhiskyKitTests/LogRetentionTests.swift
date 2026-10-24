@@ -56,30 +56,40 @@ final class LogRetentionTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: log3.path))
     }
 
-    func testWriteWineLogCapsFileAndWritesTruncationMarkerOnce() throws {
+    func testWriteWineLogCompactsOverCapAndPreservesHeadAndTail() throws {
         let dir = try makeTempDirectory()
         let fileURL = dir.appendingPathComponent("capped").appendingPathExtension("log")
         try "".write(to: fileURL, atomically: true, encoding: .utf8)
 
         let handle = try FileHandle(forWritingTo: fileURL)
 
+        handle.writeWineLog(line: "STARTUP-MARKER-LINE\n")
+
         // Write enough data to exceed the cap.
-        let chunk = String(repeating: "A", count: 64 * 1_024)
+        let chunk = String(repeating: "A", count: 64 * 1_024) + "\n"
         for _ in 0 ..< 400 { // ~25 MiB of attempted output
             handle.writeWineLog(line: chunk)
         }
+        handle.writeWineLog(line: "FINAL-DISTINCTIVE-LINE\n")
 
         try handle.closeWineLog()
 
         let data = try Data(contentsOf: fileURL)
         XCTAssertLessThanOrEqual(data.count, Int(Wine.maxLogFileBytes))
 
-        let marker = Wine.logTruncationMarker.data(using: .utf8) ?? Data()
-        let occurrences = countOccurrences(of: marker, in: data)
-        XCTAssertEqual(occurrences, 1)
+        // Under the head+tail policy the log must stay strictly decodable UTF-8,
+        // keep the startup section, retain the most recent output, and disclose
+        // every discard with a numbered marker.
+        let text = String(bytes: data, encoding: .utf8)
+        XCTAssertNotNil(text, "compacted log must remain strict UTF-8")
+        XCTAssertTrue(text?.hasPrefix("STARTUP-MARKER-LINE\n") == true)
+        XCTAssertTrue(text?.contains("FINAL-DISTINCTIVE-LINE") == true)
+
+        let markerToken = Data("[Whisky] Log retention: discarded output (event #".utf8)
+        XCTAssertGreaterThanOrEqual(countOccurrences(of: markerToken, in: data), 1)
     }
 
-    func testWriteWineLogDoesNotWriteTruncationMarkerWhenUnderCap() throws {
+    func testWriteWineLogDoesNotWriteDiscardMarkerWhenUnderCap() throws {
         let dir = try makeTempDirectory()
         let fileURL = dir.appendingPathComponent("normal").appendingPathExtension("log")
         try "".write(to: fileURL, atomically: true, encoding: .utf8)
@@ -90,15 +100,16 @@ final class LogRetentionTests: XCTestCase {
         try handle.closeWineLog()
 
         let data = try Data(contentsOf: fileURL)
-        let text = String(bytes: data, encoding: .utf8)
-        XCTAssertTrue(text?.contains("hello world") == true)
 
-        let marker = Wine.logTruncationMarker.data(using: .utf8) ?? Data()
-        let occurrences = countOccurrences(of: marker, in: data)
+        // Under the cap the log is byte-identical to what was written.
+        XCTAssertEqual(data, Data("hello world\n".utf8))
+
+        let markerToken = Data("[Whisky] Log retention: discarded output (event #".utf8)
+        let occurrences = countOccurrences(of: markerToken, in: data)
         XCTAssertEqual(occurrences, 0)
     }
 
-    func testWriteWineLogIsThreadSafeAndMarkerAppearsOnce() throws {
+    func testWriteWineLogIsThreadSafeUnderCompaction() throws {
         let dir = try makeTempDirectory()
         let fileURL = dir.appendingPathComponent("concurrent").appendingPathExtension("log")
         try "".write(to: fileURL, atomically: true, encoding: .utf8)
@@ -125,9 +136,12 @@ final class LogRetentionTests: XCTestCase {
         let data = try Data(contentsOf: fileURL)
         XCTAssertLessThanOrEqual(data.count, Int(Wine.maxLogFileBytes))
 
-        let marker = Wine.logTruncationMarker.data(using: .utf8) ?? Data()
-        let occurrences = countOccurrences(of: marker, in: data)
-        XCTAssertEqual(occurrences, 1)
+        // Concurrent writers must not corrupt the log: it stays decodable and
+        // every compaction disclosed itself with a marker.
+        XCTAssertNotNil(String(bytes: data, encoding: .utf8), "compacted log must remain strict UTF-8")
+        let markerToken = Data("[Whisky] Log retention: discarded output (event #".utf8)
+        let occurrences = countOccurrences(of: markerToken, in: data)
+        XCTAssertGreaterThanOrEqual(occurrences, 1)
     }
 
     // MARK: - Helpers

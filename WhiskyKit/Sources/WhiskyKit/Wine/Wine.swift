@@ -1378,10 +1378,13 @@ public extension Wine {
     /// Policy: cap total disk usage of Whisky's log directory at 200 MiB.
     static let maxLogsFolderBytes: Int64 = 200 * 1_024 * 1_024
 
-    /// Marker appended once when file logging begins truncation.
+    /// Marker written into a log at each discard event by `LogRetention`.
     ///
-    /// - Important: This marker is written at most once per log file and counts toward `maxLogFileBytes`.
-    static let logTruncationMarker = "\n[Whisky] Log truncated: reached 20 MiB cap; further output discarded.\n"
+    /// The marker carries a running event count, so a reader can always tell the log was
+    /// compacted and how many times. See `LogRetention.discardMarker(event:)`.
+    static func logDiscardMarker(event: Int) -> String {
+        String(decoding: LogRetention.discardMarker(event: event), as: UTF8.self)
+    }
 
     /// The URL to the directory where Wine process logs are stored.
     ///

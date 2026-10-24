@@ -24,6 +24,13 @@ public enum SteamLaunchError: LocalizedError, Equatable {
     case steamNotInstalled
     /// No bottle known to Whisky has that App ID installed.
     case gameNotFound(appId: Int)
+    /// A diagnostic launch was requested while the Steam client is already
+    /// running: its environment was fixed when it started, so the diagnostic
+    /// channels could never be added to it afterward.
+    case diagnosticsRequiresClientRestart
+    /// A diagnostic launch was requested through a driver that cannot carry
+    /// the preset.
+    case diagnosticsUnsupported
 
     public var errorDescription: String? {
         switch self {
@@ -31,6 +38,13 @@ public enum SteamLaunchError: LocalizedError, Equatable {
             String(localized: "steam.launch.error.noClient")
         case let .gameNotFound(appId):
             String(localized: "steam.launch.error.gameNotFound \(appId)")
+        // Plain literals, not localized keys: the localization wiring belongs
+        // to the opt-in surface stage, and this stage must not touch
+        // uncommitted localization work.
+        case .diagnosticsRequiresClientRestart:
+            "Diagnostic logging needs Steam fully quit first: its environment is fixed when the client starts."
+        case .diagnosticsUnsupported:
+            "This Steam driver cannot carry diagnostic logging."
         }
     }
 }
@@ -63,7 +77,17 @@ public enum SteamLauncher {
     ///     the caller already knows it.
     ///   - record: Whether to remember this bottle for the App ID.
     ///   - clientIsRunning: Whether the caller has already made sure the client
-    ///     is up, as Play does, which saves checking again.
+    ///     is up, as Play does, which saves checking again. When
+    ///     `diagnosticsPreset` is set, the caller must also have started that
+    ///     client through ``startClient(steamExe:bottle:diagnosticsPreset:)``:
+    ///     the game is expected (not verified) to inherit the CLIENT's
+    ///     environment, so the preset has to be on the client, and this
+    ///     parameter opts out of the running-client guard below.
+    ///   - diagnosticsPreset: Opt-in session diagnostics. When set, the
+    ///     preset is applied to the client this launch (re)starts and to the
+    ///     `-applaunch` invocation itself; the launch is refused with
+    ///     ``SteamLaunchError/diagnosticsRequiresClientRestart`` if the client
+    ///     is already running. `nil` (the default) is exactly today's behavior.
     ///   - onOutput: Receives the `-applaunch` invocation's output events,
     ///     starting with ``ProcessOutput/started`` once Wine is running it.
     /// - Returns: The client invocation, which finishes with its run result.
@@ -73,6 +97,7 @@ public enum SteamLauncher {
     public static func launch(
         appId: Int, bottle: Bottle, installURL: URL? = nil, record: Bool = true,
         clientIsRunning: Bool = false,
+        diagnosticsPreset: WineDebugPreset? = nil,
         onOutput: (@MainActor (ProcessOutput) -> Void)? = nil
     ) throws -> Task<Wine.ProgramRunResult, any Error> {
         guard let steamRoot = SteamLibrary.detectInstall(bottleURL: bottle.url) else {
@@ -93,19 +118,32 @@ public enum SteamLauncher {
         let gameExecutables = gameExecutables(installURL: installURL, plan: plan)
 
         return Task {
+            if diagnosticsPreset != nil, !clientIsRunning {
+                let runningPIDs = await hostSteamPIDs()
+                let clientUp = await isClientRunning(bottle: bottle, hostSteamPIDs: runningPIDs)
+                let gate = SteamSessionDiagnostics.gate(
+                    preset: diagnosticsPreset, clientIsRunning: clientUp,
+                    driverSupportsDiagnostics: true
+                )
+                if gate == .blockedClientRunning {
+                    throw SteamLaunchError.diagnosticsRequiresClientRestart
+                }
+            }
+            let diagnosticSettings = SteamSessionDiagnostics.transientProgramSettings(for: diagnosticsPreset)
             try await Wine.prepareBottlePrefix(bottle: bottle)
             await Wine.syncAudioRegistry(bottle: bottle)
             if !clientIsRunning {
                 let running = await hostSteamPIDs()
                 await startClientIfNeeded(
                     isRunning: { await isClientRunning(bottle: bottle, hostSteamPIDs: running) },
-                    start: { startClient(steamExe: steamExe, bottle: bottle) },
+                    start: { startClient(steamExe: steamExe, bottle: bottle, diagnosticsPreset: diagnosticsPreset) },
                     hasStarted: { await !hostSteamPIDs().subtracting(running).isEmpty }
                 )
             }
             return try await Wine.runProgram(
                 at: steamExe, args: ["-applaunch", String(appId)], bottle: bottle,
                 programOverrides: plan.overrides,
+                programSettings: diagnosticSettings,
                 gameProfileEnvironment: plan.gameProfileEnvironment,
                 // The plan is the game's; steam.exe is only the vehicle. It goes
                 // into the game executables' own entries, so it reaches the game
@@ -123,12 +161,18 @@ public enum SteamLauncher {
     /// way the Programs tab would, so the client's entry matches the one a
     /// game launch writes for it. Runs for the whole session, so it is never
     /// awaited.
+    /// `diagnosticsPreset` rides on a TRANSIENT ``ProgramSettings`` built for
+    /// this invocation only: the preset reaches the client's environment
+    /// (the feature layer wins over the base `fixme-all`) without ever being
+    /// written to the program's persisted settings.
     @MainActor
-    static func startClient(steamExe: URL, bottle: Bottle) {
+    static func startClient(steamExe: URL, bottle: Bottle, diagnosticsPreset: WineDebugPreset? = nil) {
         let overrides = Program.persistedOverrides(for: steamExe, bottleURL: bottle.url)
+        let diagnosticSettings = SteamSessionDiagnostics.transientProgramSettings(for: diagnosticsPreset)
         Task {
             _ = try? await Wine.runProgram(
-                at: steamExe, args: ["-silent"], bottle: bottle, programOverrides: overrides
+                at: steamExe, args: ["-silent"], bottle: bottle,
+                programOverrides: overrides, programSettings: diagnosticSettings
             )
         }
     }

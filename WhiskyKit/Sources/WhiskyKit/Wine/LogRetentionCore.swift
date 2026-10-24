@@ -154,13 +154,15 @@ final class LogRetention {
     /// The single marker text used for every discard event (compaction or clamp),
     /// carrying the running event count so repeated compactions stay honest.
     /// The text is pure ASCII, so slicing it never breaks UTF-8.
+    static func discardMarkerText(event: Int) -> String {
+        """
+        \n[Whisky] Log retention: discarded output (event #\(event)) to stay under the size cap; \
+        content between the startup header and the latest retained output is incomplete.\n
+        """
+    }
+
     static func discardMarker(event: Int) -> Data {
-        Data(
-            """
-            \n[Whisky] Log retention: discarded output (event #\(event)) to stay under the size cap; \
-            content between the startup header and the latest retained output is incomplete.\n
-            """.utf8
-        )
+        Data(discardMarkerText(event: event).utf8)
     }
 
     func write(_ data: Data) {
@@ -291,21 +293,21 @@ final class LogRetention {
         while cut > 0 {
             let last = data[data.startIndex + cut - 1]
             if last & 0x80 == 0 { return cut }
-            var p = cut - 1
+            var leadIndex = cut - 1
             var scanned = 0
-            while p >= 0, scanned < 4, (data[data.startIndex + p] & 0xC0) == 0x80 {
-                p -= 1
+            while leadIndex >= 0, scanned < 4, (data[data.startIndex + leadIndex] & 0xC0) == 0x80 {
+                leadIndex -= 1
                 scanned += 1
             }
-            if p >= 0, scanned < 4 {
-                let lead = data[data.startIndex + p]
-                if lead & 0xE0 == 0xC0, p + 2 == cut { return cut }
-                if lead & 0xF0 == 0xE0, p + 3 == cut { return cut }
-                if lead & 0xF8 == 0xF0, p + 4 == cut { return cut }
+            if leadIndex >= 0, scanned < 4 {
+                let lead = data[data.startIndex + leadIndex]
+                if lead & 0xE0 == 0xC0, leadIndex + 2 == cut { return cut }
+                if lead & 0xF0 == 0xE0, leadIndex + 3 == cut { return cut }
+                if lead & 0xF8 == 0xF0, leadIndex + 4 == cut { return cut }
             }
             // The final character is incomplete or malformed at the cut: drop it
             // and re-verify the shorter prefix.
-            cut = Swift.max(0, p)
+            cut = Swift.max(0, leadIndex)
         }
         return 0
     }

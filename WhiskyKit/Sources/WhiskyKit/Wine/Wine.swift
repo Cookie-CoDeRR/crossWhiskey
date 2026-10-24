@@ -1381,9 +1381,9 @@ public extension Wine {
     /// Marker written into a log at each discard event by `LogRetention`.
     ///
     /// The marker carries a running event count, so a reader can always tell the log was
-    /// compacted and how many times. See `LogRetention.discardMarker(event:)`.
+    /// compacted and how many times. See `LogRetention.discardMarkerText(event:)`.
     static func logDiscardMarker(event: Int) -> String {
-        String(decoding: LogRetention.discardMarker(event: event), as: UTF8.self)
+        LogRetention.discardMarkerText(event: event)
     }
 
     /// The URL to the directory where Wine process logs are stored.

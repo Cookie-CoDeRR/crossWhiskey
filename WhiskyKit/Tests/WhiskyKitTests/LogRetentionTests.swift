@@ -85,7 +85,7 @@ final class LogRetentionTests: XCTestCase {
         XCTAssertTrue(text?.hasPrefix("STARTUP-MARKER-LINE\n") == true)
         XCTAssertTrue(text?.contains("FINAL-DISTINCTIVE-LINE") == true)
 
-        let markerToken = "[Whisky] Log retention: discarded output (event #".data(using: .utf8) ?? Data()
+        let markerToken = Data("[Whisky] Log retention: discarded output (event #".utf8)
         XCTAssertGreaterThanOrEqual(countOccurrences(of: markerToken, in: data), 1)
     }
 
@@ -102,9 +102,9 @@ final class LogRetentionTests: XCTestCase {
         let data = try Data(contentsOf: fileURL)
 
         // Under the cap the log is byte-identical to what was written.
-        XCTAssertEqual(data, "hello world\n".data(using: .utf8))
+        XCTAssertEqual(data, Data("hello world\n".utf8))
 
-        let markerToken = "[Whisky] Log retention: discarded output (event #".data(using: .utf8) ?? Data()
+        let markerToken = Data("[Whisky] Log retention: discarded output (event #".utf8)
         let occurrences = countOccurrences(of: markerToken, in: data)
         XCTAssertEqual(occurrences, 0)
     }
@@ -139,7 +139,7 @@ final class LogRetentionTests: XCTestCase {
         // Concurrent writers must not corrupt the log: it stays decodable and
         // every compaction disclosed itself with a marker.
         XCTAssertNotNil(String(bytes: data, encoding: .utf8), "compacted log must remain strict UTF-8")
-        let markerToken = "[Whisky] Log retention: discarded output (event #".data(using: .utf8) ?? Data()
+        let markerToken = Data("[Whisky] Log retention: discarded output (event #".utf8)
         let occurrences = countOccurrences(of: markerToken, in: data)
         XCTAssertGreaterThanOrEqual(occurrences, 1)
     }

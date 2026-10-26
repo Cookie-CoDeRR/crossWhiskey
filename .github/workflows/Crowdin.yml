@@ -46,7 +46,7 @@ jobs:
       # Push to main → push new English source strings up to Crowdin.
       - name: Upload sources
         if: steps.check.outputs.configured == 'true' && github.event_name == 'push'
-        uses: crowdin/github-action@52aa776766211d83d975df51f3b9c53c2f8ba35f # v2.16.3
+        uses: crowdin/github-action@959dc74ac104447731cba99a016f85d0ae719788 # v3.5.0
         with:
           upload_sources: true
           download_translations: false
@@ -73,7 +73,7 @@ jobs:
       # Schedule / manual → refresh sources, pull translations, open a PR.
       - name: Download translations
         if: steps.check.outputs.configured == 'true' && github.event_name != 'push'
-        uses: crowdin/github-action@52aa776766211d83d975df51f3b9c53c2f8ba35f # v2.16.3
+        uses: crowdin/github-action@959dc74ac104447731cba99a016f85d0ae719788 # v3.5.0
         with:
           upload_sources: true
           download_translations: true

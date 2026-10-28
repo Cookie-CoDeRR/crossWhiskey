@@ -1,0 +1,169 @@
+=== TEST EXECUTION LOG: SLICE 5 DIAGNOSTIC DISK SINK ===
+Target Branch: review/diagnostic-disk-sink-20261028-115106
+Base Commit: e0fd83a098a67b143786aa972934a9b6f96444d9
+Host Platform: arm64-apple-darwin24.0.0 (macOS 15.0)
+Testing Framework: Swift Testing (Testing Library Version 2084)
+
+Note: Absolute paths have been sanitized to <WORKTREE> and <CACHE>.
+
+================================================================================
+1. DiagnosticDiskSinkTests (Initial Run - Failure Demonstration)
+================================================================================
+Command:
+swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticDiskSinkTests
+Exit Code: 1
+
+Output:
+Building for debugging...
+[Computing dependencies]
+[Using on-disk description]
+Build complete! (11.93 secs)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" started.
+◇ Test "Test B: Bounded retention compaction keeps startup head, advances suffix, and updates sidecar" started.
+◇ Test "Test E: Symlink rejection, file collision, and empty/oversized chunk policies" started.
+◇ Test "Test F: Controlled disk stall under ingress maintains bounded admission and accounts drops" started.
+◇ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" started.
+◇ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" started.
+◇ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" started.
+✔ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" passed after 0.001 seconds.
+✔ Test "Test E: Symlink rejection, file collision, and empty/oversized chunk policies" passed after 0.024 seconds.
+✔ Test "Test B: Bounded retention compaction keeps startup head, advances suffix, and updates sidecar" passed after 0.028 seconds.
+✔ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" passed after 0.028 seconds.
+✘ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" recorded an issue at DiagnosticDiskSinkTests.swift:274:9: Expectation failed: an error was expected but none was thrown
+↳ DiagnosticDiskSinkError.self → <not evaluated>
+↳   DiagnosticDiskSinkError → <not evaluated>
+↳   self → <not evaluated>
+✔ Test "Test F: Controlled disk stall under ingress maintains bounded admission and accounts drops" passed after 0.040 seconds.
+✘ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" recorded an issue at DiagnosticDiskSinkTests.swift:278:9: Expectation failed: receiptTruncate.stdoutRecord.status == .partiallyCompacted
+↳ receiptTruncate.stdoutRecord.status == .partiallyCompacted → false
+↳   receiptTruncate.stdoutRecord.status → .sealed
+✘ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" recorded an issue at DiagnosticDiskSinkTests.swift:279:9: Expectation failed: receiptTruncate.stdoutRecord.lastFailedOperation == .truncate
+↳ receiptTruncate.stdoutRecord.lastFailedOperation == .truncate → false
+↳   receiptTruncate.stdoutRecord.lastFailedOperation → nil
+↳     some → .truncate
+✘ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" failed after 0.065 seconds with 3 issues.
+✘ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" failed after 0.065 seconds with 3 issues.
+✘ Test run with 6 tests in 1 suite failed after 0.065 seconds with 3 issues.
+
+Analysis & Fix:
+In Test D Case 3, the test primed 3 chunks of 100 bytes (300 bytes) against a 500-byte cap, and then attempted chunk 4 (100 bytes, total 400 bytes), which did not exceed the 500-byte threshold. The test was adjusted to prime 5 chunks (500 bytes) so chunk 6 (100 bytes, total 600 > 500) successfully crossed the threshold and triggered compaction and the injected truncate fault.
+
+================================================================================
+2. DiagnosticDiskSinkTests (Final Verified Run)
+================================================================================
+Command:
+swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticDiskSinkTests
+Exit Code: 0
+
+Output:
+Building for debugging...
+[Computing dependencies]
+[Using on-disk description]
+[1 / 3]
+Build complete! (1.73 secs)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" started.
+◇ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" started.
+◇ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" started.
+◇ Test "Test F: Controlled disk stall under ingress maintains bounded admission and accounts drops" started.
+◇ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" started.
+◇ Test "Test E: Symlink rejection, file collision, and empty/oversized chunk policies" started.
+◇ Test "Test B: Bounded retention compaction keeps startup head, advances suffix, and updates sidecar" started.
+✔ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" passed after 0.004 seconds.
+✔ Test "Test E: Symlink rejection, file collision, and empty/oversized chunk policies" passed after 0.034 seconds.
+✔ Test "Test B: Bounded retention compaction keeps startup head, advances suffix, and updates sidecar" passed after 0.045 seconds.
+✔ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" passed after 0.046 seconds.
+✔ Test "Test F: Controlled disk stall under ingress maintains bounded admission and accounts drops" passed after 0.058 seconds.
+✔ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" passed after 0.077 seconds.
+✔ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" passed after 0.077 seconds.
+✔ Test run with 6 tests in 1 suite passed after 0.077 seconds.
+
+================================================================================
+3. DiagnosticIngressTests (Frozen Suite Regression Run)
+================================================================================
+Command:
+swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticIngressTests
+Exit Code: 0
+
+Output:
+Building for debugging...
+[Computing dependencies]
+[Using on-disk description]
+[1 / 5] SemanticVersion
+Build complete! (1.33 secs)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" started.
+◇ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" started.
+◇ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" started.
+◇ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" started.
+◇ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" started.
+◇ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" started.
+◇ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" started.
+◇ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" started.
+✔ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" passed after 0.001 seconds.
+✔ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" passed after 0.002 seconds.
+✔ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" passed after 0.002 seconds.
+✔ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" passed after 0.002 seconds.
+✔ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" passed after 0.002 seconds.
+✔ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" passed after 0.055 seconds.
+✔ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" passed after 0.061 seconds.
+✔ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" passed after 0.062 seconds.
+✔ Test run with 7 tests in 1 suite passed after 0.062 seconds.
+
+================================================================================
+4. DiagnosticCaptureCoreTests (Frozen Suite Regression Run)
+================================================================================
+Command:
+swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticCaptureCoreTests
+Exit Code: 0
+
+Output:
+Building for debugging...
+[Computing dependencies]
+[Using on-disk description]
+[1 / 3]
+Build complete! (1.12 secs)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Diagnostic capture pure core: admission registry, grace reducer, and metadata" started.
+✔ Suite "Diagnostic capture pure core: admission registry, grace reducer, and metadata" passed after 0.004 seconds.
+✔ Test run with 47 tests in 1 suite passed after 0.004 seconds.
+
+================================================================================
+5. DiagnosticPipeReaderTests (Frozen Suite Regression Run)
+================================================================================
+Command:
+swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticPipeReaderTests
+Exit Code: 0
+
+Output:
+Building for debugging...
+[Computing dependencies]
+[Using on-disk description]
+Build complete! (2.04 secs)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Diagnostic pipe reader: real descriptor ownership, nonblocking discipline, and pure core bridge" started.
+✔ Suite "Diagnostic pipe reader: real descriptor ownership, nonblocking discipline, and pure core bridge" passed after 0.020 seconds.
+✔ Test run with 27 tests in 1 suite passed after 0.020 seconds.
+
+================================================================================
+Summary of Focused Test Results
+================================================================================
+- DiagnosticDiskSinkTests: 6 passed / 0 failed (0.077s)
+- DiagnosticIngressTests: 7 passed / 0 failed (0.062s)
+- DiagnosticCaptureCoreTests: 47 passed / 0 failed (0.004s)
+- DiagnosticPipeReaderTests: 27 passed / 0 failed (0.020s)
+Total: 87 passed / 0 failed across all targeted suites.
+DiagnosticSubprocessCaptureTests was intentionally not run, per slice instructions.
+Whole-app build was not attempted.
+Universal power-loss durability is not claimed.

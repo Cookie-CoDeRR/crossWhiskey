@@ -1,34 +1,33 @@
-# Slice 5: Isolated Bounded Disk Sink & Persistence Receipt
+# Slice 5 Fix #1: Raw Retention, Honest Outcomes & Owned Resources
 
-## 1. Specification & Architectural Contract
+## 1. Specification & Corrected Architectural Contract
 
 ### 1.1 Scope & Non-Goals
-- **Component Scope**: Synchronous, single-owner disk sink (`DiagnosticDiskSink`) responsible for streaming raw bytes to disk (`stdout.bin` and `stderr.bin`), executing bounded in-place retention compaction when disk caps are reached, sealing persistence state, and publishing an atomic, versioned sidecar (`persistence.json`).
+- **Component Scope**: Synchronous, single-owner disk sink (`DiagnosticDiskSink`) responsible for streaming raw bytes to disk (`stdout.bin` and `stderr.bin`), executing bounded in-place retention compaction when disk caps are reached, sealing persistence state, and publishing an atomic, non-overwriting versioned sidecar (`persistence.json`).
 - **Boundaries**:
   - **No concurrency or internal queue**: `DiagnosticDiskSink` does NOT perform internal thread dispatch or task hopping. A caller/owner component (e.g. `DiagnosticIngress` serial drain queue or capture owner) must serialize invocations. Disk I/O must never run on the pipe reader callback queue.
   - **No production wiring**: This slice does not wire the sink into `SteamSessionDiagnostics`, `Wine.swift`, or `DiagnosticIngress` production paths.
   - **No whole-app or launcher modifications**: Existing launch/session/retention/UI files and `Package.swift` remain untouched.
   - **No power-loss durability claim**: Successful completion of POSIX `write`, `fsync`, `close`, and `rename` operations certifies that the operating system accepted and synced the data to the storage controller; it does not claim universal hardware power-loss survival.
 
-### 1.2 Directory Safety & File Ownership
+### 1.2 Directory Safety & Anchored File Operations
 - Operates strictly in a caller-provided session directory.
-- **Symlink Rejection**: Rejects symlinks at the directory level (`lstat` check) to prevent directory traversal and symlink hijacking.
+- **Symlink Ancestor & Path Rejection**: Rejects symlinks along the entire ancestor path hierarchy as well as the final directory component (`O_NOFOLLOW` and recursive `lstat` ancestor checks).
+- **Directory Descriptor Anchoring**: The session directory is opened with `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` to obtain an owned directory file descriptor (`dirFd`). All subsequent file operations (`openat`, `unlinkat`, `renameatx_np`, directory `fsync`) are anchored directly to this descriptor, eliminating pathname-based race conditions and symlink hijacking.
 - **Collision Resistance**: Target files (`stdout.bin`, `stderr.bin`, `persistence.json`, and temporary staging files) must not pre-exist. They are created with `O_CREAT | O_EXCL` with private POSIX permissions (`0o600` for files, `0o700` for directories).
-- **Cleanup Confinement**: On initialization failure or unrecoverable error during setup, the sink removes only the resources it explicitly created, never touching pre-existing user files.
+- **Cleanup Confinement**: On initialization failure, explicit `abort()`, or unrecoverable error during setup, the sink removes only the resources it explicitly created, never touching pre-existing user files.
 
-### 1.3 Payload Streaming & Byte Integrity
+### 1.3 Verbatim Raw Byte Retention & Zero In-Band Markers
 - Independent stream files:
   - `DiagnosticStreamKind.stdout` -> `<sessionDir>/stdout.bin`
   - `DiagnosticStreamKind.stderr` -> `<sessionDir>/stderr.bin`
-- **Chunk Handling**:
-  - Chunks up to `maxChunkBytes` (default: 64 KiB = 65,536 bytes).
-  - Empty chunks (`data.isEmpty`) are explicitly rejected (`DiagnosticDiskSinkError.emptyChunk`).
-  - Oversized chunks (`data.count > maxChunkBytes`) are explicitly rejected (`DiagnosticDiskSinkError.oversizedChunk`).
-- **Verbatim Raw Retention**:
-  - Under cap, bytes are written exactly as supplied, preserving binary sequences, NUL bytes (`0x00`), invalid UTF-8, and split multibyte codepoints without text parsing or newline snapping.
-  - Metadata is strictly segregated to the sidecar (`persistence.json`) and is never interleaved into raw streams under cap.
+- **Zero In-Band Markers**:
+  - `stdout.bin` and `stderr.bin` contain **ONLY** original payload bytes: exact original startup prefix (`head`) and most recent suffix (`tail`) after cuts.
+  - No inserted ASCII markers, delimiter text, UTF-8 snapping, or text decoding are applied to payload files under any circumstances.
+  - Under cap, reopened files equal the exact original stream byte-for-byte, including binary sequences, NUL bytes (`0x00`), invalid UTF-8, and split multibyte codepoints.
+  - Gap disclosure and discard counts are strictly segregated to the sidecar (`persistence.json`) so concatenated fragments are never mistaken for complete continuous output.
 
-### 1.4 Budgets, In-Memory Bounds & Retention Compaction
+### 1.4 Bounded Retention & Exact Accounting
 - **Budgets** (configurable via `DiagnosticDiskSinkConfiguration`):
   - `maxBytesPerStream`: 20 MiB (`20,971,520` bytes, matching `Wine.maxLogFileBytes`).
   - `headBudget`: 4 MiB (`4,194,304` bytes).
@@ -36,38 +35,41 @@
   - `maxChunkBytes`: 64 KiB (`65,536` bytes).
   - `tailTrimThreshold`: 16 MiB (`16,777,216` bytes).
   - `maxSidecarBytes`: 64 KiB (`65,536` bytes).
-- **Compaction Algorithm**:
-  - When writing a chunk would cause stream disk size to exceed `maxBytesPerStream`:
-    1. Startup head (first `headBudget` bytes) is preserved verbatim.
-    2. A bounded raw discard marker discloses the retention event and discarded byte count:
-       `"\n--- [DIAGNOSTIC RETENTION: <bytes> BYTES DISCARDED (EVENT <count>)] ---\n"`.
-    3. The most recent suffix from the rolling tail buffer is written after the marker, fitting within `maxBytesPerStream`.
-    4. Truncation ordering: File is truncated to `head.count` BEFORE writing the marker and suffix to guarantee that disk usage never exceeds `maxBytesPerStream` during rewrite.
-    5. Partial-write disclosure: If compaction rewrite encounters an I/O error, the stream is marked `partiallyCompacted` / failed, disclosing potential discontinuity rather than claiming atomic rewrite.
+  - Total payload disk cap for two streams: at most 40 MiB.
+- **Compaction & Startup Head Invariants**:
+  - The startup head (first `headBudget` bytes) is preserved verbatim even if the very first incoming chunk exceeds the stream cap (`firstChunk > cap`).
+  - The rolling tail buffer is sliced strictly from bytes beyond the head, preventing prefix/suffix overlap or double-counting.
+  - On compaction:
+    1. Startup head is written at offset 0 (if not already committed).
+    2. File is truncated to `head.count`.
+    3. The most recent suffix (up to `tailBudget`) is written starting at offset `head.count`.
+    4. Disk size is strictly bounded: `head.count + suffix.count <= maxBytesPerStream`.
+- **Accounting Identities**:
+  - `totalAdmittedBytes`: Unique admitted payload bytes.
+  - `committedBytes`: Known unique admitted payload bytes successfully landed on disk; never exceeds `totalAdmittedBytes`.
+  - `retainedBytesOnDisk`: Actual byte size physically on disk (`head.count + tail.count`).
+  - `discardedBytes`: Admitted payload bytes dropped by retention (`totalAdmittedBytes - retainedBytesOnDisk` when state is known).
+  - `physicalRewriteBytes`: Disk rewrite counter tracked separately from admitted/committed payload.
+  - All counters use saturating arithmetic (`addingReportingOverflow`) to expose overflow rather than wrap.
 
-### 1.5 Observable Failure & Fail-Closed Semantics
-- POSIX I/O errors (`errno`) and operations (`open`, `write`, `seek`, `truncate`, `sync`, `close`, `rename`) are captured with bounded codes.
-- On any I/O failure (including short writes or disk exhaustion), the sink transitions immediately to a sealed/failed state. Subsequent write calls fail closed without retry storms.
-- Saturating arithmetic is enforced for all byte counters to expose overflow rather than wrap.
+### 1.5 Bounded Stage Outcomes & Partial Progress Preservation
+- POSIX write operations capture partial progress on short writes and errors. If a write lands partial bytes before failing (e.g. storage exhaustion), `committedBytes` and `retainedBytesOnDisk` reflect the exact committed count without double-counting or false zero reporting.
+- Independent stage outcomes are tracked per stream (`openOutcome`, `writeOutcome`, `compactionOutcome`, `syncOutcome`, `closeOutcome`) and per metadata publication (`createOutcome`, `writeOutcome`, `syncOutcome`, `closeOutcome`, `publishOutcome`, `directorySyncOutcome`).
+- An earlier payload write error does not hide a later metadata error; a close failure does not erase a write or sync failure.
 
-### 1.6 Two-Phase Sidecar Publication & Terminal Receipt
-- `finish()` seals the sink and executes the following sequence:
-  1. Flushes and syncs (`fsync`) all open payload stream file descriptors.
-  2. Closes all open payload stream file descriptors.
-  3. Prepares the persistence sidecar (`persistence.json`) containing stream accounting and final statuses.
-  4. Writes sidecar to a temporary staging file (`.persistence.json.tmp.<uuid>`) in the session directory.
-  5. Syncs and closes the staging file.
-  6. Atomically renames the staging file to `persistence.json` (`rename(2)`).
-  7. Best-effort parent directory sync (`fsync` / `F_FULLFSYNC` on directory descriptor).
-- Returns an immutable, idempotent `DiagnosticDiskSinkReceipt`.
-- The returned receipt is the sole authority on publication success; the sidecar file cannot self-certify its subsequent rename or directory-sync outcome.
-- **Parent Directory Sync Coverage & Limitations**: Darwin APFS flushes directory container structures during directory fsync; this ensures namespace consistency against process crashes, but does not offer universal storage controller durability across all external file systems.
+### 1.6 Descriptor Ownership & Atomic No-Overwrite Publication
+- **Explicit Descriptor Ownership**: Every file descriptor (`stdout`, `stderr`, `dirFd`, `tmpFd`) has exactly one owner and receives exactly one close attempt on all paths. Ownership is immediately disarmed upon close attempt to prevent descriptor reuse issues.
+- **Explicit Abort (`abort()`)**: Callers/tests can safely abort an in-flight sink, closing all descriptors and cleaning up staging files.
+- **Atomic No-Overwrite Publication**:
+  - The sidecar (`persistence.json`) is staged in `.persistence.json.tmp.<uuid>`.
+  - Published using Darwin `renameatx_np(dirFd, tmp, dirFd, "persistence.json", RENAME_EXCL)`.
+  - If `persistence.json` already exists at publication time, the call fails with `EEXIST` and refuses to overwrite the destination. The pre-existing file is preserved intact.
 
 ---
 
 ## 2. Review Base & Frozen Hashes
 
-- **Base Commit**: `e0fd83a098a67b143786aa972934a9b6f96444d9`
+- **Base Commit**: `029570c40c54510cdbd17f46125f565091633532`
 - **Frozen File Verification**:
   - `WhiskyKit/Sources/WhiskyKit/Steam/DiagnosticCaptureCore.swift`: `964090d059998658bb29310bf800e9da405346d4b3bc7bf638453f4572edfa02`
   - `WhiskyKit/Tests/WhiskyKitTests/DiagnosticCaptureCoreTests.swift`: `964d1fc0a4a56997261e5a2553d1067e058be96069398dcb2fc237a3b7d78dd0`
@@ -79,23 +81,23 @@
 
 ---
 
-## 3. New Implementation Files & Hashes
+## 3. Implementation Files & Hashes
 
-- `WhiskyKit/Sources/WhiskyKit/Steam/DiagnosticDiskSink.swift` (939 lines)
-  - SHA256: `245948d8c44343c3ce7cb28e359946ed02fdb902ac66c9aa708ff881a833afd4`
-- `WhiskyKit/Tests/WhiskyKitTests/DiagnosticDiskSinkTests.swift` (518 lines)
-  - SHA256: `353cd2836f1b8daf411fca62b3c2b8b6136c701d9358f124edda493531828b85`
+- `WhiskyKit/Sources/WhiskyKit/Steam/DiagnosticDiskSink.swift` (1137 lines)
+  - SHA256: `1fa93db2e0de3e3dfd47f920ac0b091f730e1abc6b23a069acee0b04b91951dc`
+- `WhiskyKit/Tests/WhiskyKitTests/DiagnosticDiskSinkTests.swift` (516 lines)
+  - SHA256: `3278a6741f4c91cce1769fe15eacb10c51cac09efbd045360822220c5a32b88a`
 
 ---
 
 ## 4. Test Verification Summary
 
 All focused test suites were executed with worktree-local caches and zero network access:
-- `DiagnosticDiskSinkTests`: 6/6 passed (0.077s)
-- `DiagnosticIngressTests`: 7/7 passed (0.062s)
-- `DiagnosticCaptureCoreTests`: 47/47 passed (0.004s)
-- `DiagnosticPipeReaderTests`: 27/27 passed (0.020s)
-Total: 87 passed, 0 failed.
+- `DiagnosticDiskSinkTests`: 5/5 passed (0.069s)
+- `DiagnosticIngressTests`: 7/7 passed (0.084s)
+- `DiagnosticCaptureCoreTests`: 47/47 passed (0.020s)
+- `DiagnosticPipeReaderTests`: 27/27 passed (0.038s)
+Total: 86 passed, 0 failed.
 
 Notice:
 - `DiagnosticSubprocessCaptureTests` was intentionally excluded per bounded scope instructions.

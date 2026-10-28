@@ -126,7 +126,9 @@ public enum DiagnosticDiskSinkError: Error, Sendable, Equatable {
     case oversizedChunk(byteCount: Int, maxChunkBytes: Int)
     case sealed
     case ioError(operation: IOOperation, errno: Int32, message: String, bytesCommitted: Int? = nil)
+    case shortWrite(operation: IOOperation, bytesCommitted: Int, expectedBytes: Int)
     case sidecarTooLarge(byteCount: Int, maxBytes: Int)
+    indirect case setupFailed(primary: DiagnosticDiskSinkError, cleanupFailure: DiagnosticDiskSinkError?)
 }
 
 // MARK: - Stream & Persistence Status
@@ -143,13 +145,18 @@ public struct StreamDiskRecord: Sendable, Codable, Equatable {
     public let fileName: String
     public let totalAdmittedBytes: UInt64
     public let committedBytes: UInt64
+    public let landedUniqueBytes: UInt64
     public let retainedBytesOnDisk: UInt64
     public let retainedHeadBytes: Int
     public let retainedTailBytes: Int
+    public let neverWrittenDiscardedBytes: UInt64
+    public let retentionTrimmedBytes: UInt64
     public let discardEvents: Int
     public let discardedBytes: UInt64
+    public let physicalWriteBytes: UInt64
     public let physicalRewriteBytes: UInt64
     public let isCompacted: Bool
+    public let diskPayloadKnown: Bool
     public let status: StreamPersistenceStatus
 
     // Stage outcomes
@@ -164,13 +171,18 @@ public struct StreamDiskRecord: Sendable, Codable, Equatable {
         fileName: String,
         totalAdmittedBytes: UInt64,
         committedBytes: UInt64,
+        landedUniqueBytes: UInt64,
         retainedBytesOnDisk: UInt64,
         retainedHeadBytes: Int,
         retainedTailBytes: Int,
+        neverWrittenDiscardedBytes: UInt64,
+        retentionTrimmedBytes: UInt64,
         discardEvents: Int,
         discardedBytes: UInt64,
+        physicalWriteBytes: UInt64,
         physicalRewriteBytes: UInt64,
         isCompacted: Bool,
+        diskPayloadKnown: Bool,
         status: StreamPersistenceStatus,
         openOutcome: StageOutcome,
         writeOutcome: StageOutcome,
@@ -182,13 +194,18 @@ public struct StreamDiskRecord: Sendable, Codable, Equatable {
         self.fileName = fileName
         self.totalAdmittedBytes = totalAdmittedBytes
         self.committedBytes = committedBytes
+        self.landedUniqueBytes = landedUniqueBytes
         self.retainedBytesOnDisk = retainedBytesOnDisk
         self.retainedHeadBytes = retainedHeadBytes
         self.retainedTailBytes = retainedTailBytes
+        self.neverWrittenDiscardedBytes = neverWrittenDiscardedBytes
+        self.retentionTrimmedBytes = retentionTrimmedBytes
         self.discardEvents = discardEvents
         self.discardedBytes = discardedBytes
+        self.physicalWriteBytes = physicalWriteBytes
         self.physicalRewriteBytes = physicalRewriteBytes
         self.isCompacted = isCompacted
+        self.diskPayloadKnown = diskPayloadKnown
         self.status = status
         self.openOutcome = openOutcome
         self.writeOutcome = writeOutcome
@@ -277,6 +294,7 @@ public struct DiagnosticDiskSinkReceipt: Sendable, Equatable {
     public let parentDirectorySynced: Bool
     public let isSealed: Bool
     public let failure: DiagnosticDiskSinkError?
+    public let cleanupError: DiagnosticDiskSinkError?
     public let hasCounterOverflow: Bool
 
     public init(
@@ -290,6 +308,7 @@ public struct DiagnosticDiskSinkReceipt: Sendable, Equatable {
         parentDirectorySynced: Bool,
         isSealed: Bool,
         failure: DiagnosticDiskSinkError?,
+        cleanupError: DiagnosticDiskSinkError? = nil,
         hasCounterOverflow: Bool
     ) {
         self.sessionId = sessionId
@@ -302,6 +321,7 @@ public struct DiagnosticDiskSinkReceipt: Sendable, Equatable {
         self.parentDirectorySynced = parentDirectorySynced
         self.isSealed = isSealed
         self.failure = failure
+        self.cleanupError = cleanupError
         self.hasCounterOverflow = hasCounterOverflow
     }
 }
@@ -309,8 +329,10 @@ public struct DiagnosticDiskSinkReceipt: Sendable, Equatable {
 // MARK: - Injectable File Operation Adapter
 
 public protocol DiskSinkFileAdapter: AnyObject, Sendable {
-    func openDirectory(path: String) throws -> Int32
-    func createDirectory(path: String, mode: mode_t) throws
+    func openRootDirectory() throws -> Int32
+    func openDirectoryAt(parentFd: Int32, component: String) throws -> Int32
+    func createDirectoryAt(parentFd: Int32, component: String, mode: mode_t) throws
+    func removeDirectoryAt(parentFd: Int32, component: String) throws
     func openAt(dirFd: Int32, fileName: String, flags: Int32, mode: mode_t) throws -> Int32
     func write(fd: Int32, data: Data) throws -> Int
     func seek(fd: Int32, offset: off_t, whence: Int32) throws -> off_t
@@ -320,30 +342,54 @@ public protocol DiskSinkFileAdapter: AnyObject, Sendable {
     func publishSidecar(dirFd: Int32, tmpName: String, targetName: String) throws
     func syncDirectory(dirFd: Int32) throws
     func unlinkAt(dirFd: Int32, fileName: String) throws
-    func removeDirectory(path: String) throws
     func fileExistsAt(dirFd: Int32, fileName: String) -> Bool
-    func isDirectory(path: String) -> Bool
-    func isSymbolicLink(path: String) -> Bool
-    func checkSymlinkAncestors(path: String) -> Bool
 }
 
 public final class POSIXDiskSinkFileAdapter: DiskSinkFileAdapter, @unchecked Sendable {
     public init() {}
 
-    public func openDirectory(path: String) throws -> Int32 {
-        let fd = Darwin.open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    public func openRootDirectory() throws -> Int32 {
+        let fd = Darwin.open("/", O_RDONLY | O_DIRECTORY)
         if fd < 0 {
             let err = errno
-            throw DiagnosticDiskSinkError.ioError(operation: .directoryOpen, errno: err, message: "open directory failed: \(err)")
+            throw DiagnosticDiskSinkError.ioError(operation: .directoryOpen, errno: err, message: "open root failed: \(err)")
         }
         return fd
     }
 
-    public func createDirectory(path: String, mode: mode_t) throws {
-        let result = Darwin.mkdir(path, mode)
+    public func openDirectoryAt(parentFd: Int32, component: String) throws -> Int32 {
+        var statBuf = stat()
+        let statRes = Darwin.fstatat(parentFd, component, &statBuf, AT_SYMLINK_NOFOLLOW)
+        if statRes == 0 && (statBuf.st_mode & S_IFMT) == S_IFLNK {
+            throw DiagnosticDiskSinkError.symlinkRejected("Path component '\(component)' is a symbolic link")
+        }
+        let fd = Darwin.openat(parentFd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        if fd < 0 {
+            let err = errno
+            if err == ELOOP || (err == ENOTDIR && statRes == 0 && (statBuf.st_mode & S_IFMT) == S_IFLNK) {
+                throw DiagnosticDiskSinkError.symlinkRejected("Path component '\(component)' is a symbolic link")
+            }
+            throw DiagnosticDiskSinkError.ioError(operation: .directoryOpen, errno: err, message: "openat failed for directory component '\(component)': \(err)")
+        }
+        return fd
+    }
+
+    public func createDirectoryAt(parentFd: Int32, component: String, mode: mode_t) throws {
+        let result = Darwin.mkdirat(parentFd, component, mode)
         if result != 0 {
             let err = errno
-            throw DiagnosticDiskSinkError.ioError(operation: .directoryCreate, errno: err, message: "mkdir failed: \(err)")
+            if err == EEXIST {
+                throw DiagnosticDiskSinkError.fileCollision("Session directory child '\(component)' already exists")
+            }
+            throw DiagnosticDiskSinkError.ioError(operation: .directoryCreate, errno: err, message: "mkdirat failed for '\(component)': \(err)")
+        }
+    }
+
+    public func removeDirectoryAt(parentFd: Int32, component: String) throws {
+        let result = Darwin.unlinkat(parentFd, component, AT_REMOVEDIR)
+        if result != 0 {
+            let err = errno
+            throw DiagnosticDiskSinkError.ioError(operation: .cleanup, errno: err, message: "unlinkat AT_REMOVEDIR failed for directory '\(component)': \(err)")
         }
     }
 
@@ -351,6 +397,12 @@ public final class POSIXDiskSinkFileAdapter: DiskSinkFileAdapter, @unchecked Sen
         let fd = Darwin.openat(dirFd, fileName, flags | O_NOFOLLOW, mode)
         if fd < 0 {
             let err = errno
+            if err == EEXIST {
+                throw DiagnosticDiskSinkError.fileCollision("File '\(fileName)' already exists")
+            }
+            if err == ELOOP {
+                throw DiagnosticDiskSinkError.symlinkRejected("File '\(fileName)' is a symlink")
+            }
             throw DiagnosticDiskSinkError.ioError(operation: .open, errno: err, message: "openat failed for \(fileName): \(err)")
         }
         return fd
@@ -372,12 +424,15 @@ public final class POSIXDiskSinkFileAdapter: DiskSinkFileAdapter, @unchecked Sen
                         operation: .write,
                         errno: err,
                         message: "write failed: \(err)",
-                        bytesCommitted: writtenTotal
+                        bytesCommitted: writtenTotal > 0 ? writtenTotal : nil
                     )
                 }
                 if result == 0 {
-                    // Reached zero write (e.g. storage exhaustion)
-                    break
+                    throw DiagnosticDiskSinkError.shortWrite(
+                        operation: .write,
+                        bytesCommitted: writtenTotal,
+                        expectedBytes: data.count
+                    )
                 }
                 writtenTotal += result
             }
@@ -420,10 +475,12 @@ public final class POSIXDiskSinkFileAdapter: DiskSinkFileAdapter, @unchecked Sen
     }
 
     public func publishSidecar(dirFd: Int32, tmpName: String, targetName: String) throws {
-        // Darwin atomic non-overwriting rename using RENAME_EXCL
         let ret = Darwin.renameatx_np(dirFd, tmpName, dirFd, targetName, UInt32(RENAME_EXCL))
         if ret != 0 {
             let err = errno
+            if err == EEXIST {
+                throw DiagnosticDiskSinkError.fileCollision("Destination '\(targetName)' already exists")
+            }
             throw DiagnosticDiskSinkError.ioError(operation: .rename, errno: err, message: "renameatx_np failed: \(err)")
         }
     }
@@ -443,49 +500,9 @@ public final class POSIXDiskSinkFileAdapter: DiskSinkFileAdapter, @unchecked Sen
         }
     }
 
-    public func removeDirectory(path: String) throws {
-        let ret = Darwin.rmdir(path)
-        if ret != 0 {
-            let err = errno
-            throw DiagnosticDiskSinkError.ioError(operation: .cleanup, errno: err, message: "rmdir failed: \(err)")
-        }
-    }
-
     public func fileExistsAt(dirFd: Int32, fileName: String) -> Bool {
         var statBuf = stat()
         return Darwin.fstatat(dirFd, fileName, &statBuf, AT_SYMLINK_NOFOLLOW) == 0
-    }
-
-    public func isDirectory(path: String) -> Bool {
-        var statBuf = stat()
-        if Darwin.lstat(path, &statBuf) == 0 {
-            return (statBuf.st_mode & S_IFMT) == S_IFDIR
-        }
-        return false
-    }
-
-    public func isSymbolicLink(path: String) -> Bool {
-        var statBuf = stat()
-        if Darwin.lstat(path, &statBuf) == 0 {
-            return (statBuf.st_mode & S_IFMT) == S_IFLNK
-        }
-        return false
-    }
-
-    public func checkSymlinkAncestors(path: String) -> Bool {
-        var current = URL(fileURLWithPath: path).standardized
-        while current.path != "/" && !current.path.isEmpty {
-            var statBuf = stat()
-            if Darwin.lstat(current.path, &statBuf) == 0 {
-                if (statBuf.st_mode & S_IFMT) == S_IFLNK {
-                    return true
-                }
-            }
-            let parent = current.deletingLastPathComponent()
-            if parent.path == current.path { break }
-            current = parent
-        }
-        return false
     }
 }
 
@@ -497,12 +514,17 @@ private final class StreamState {
     var fd: Int32 = -1
 
     var totalAdmittedBytes: UInt64 = 0
-    var committedBytes: UInt64 = 0
+    var landedUniqueBytes: UInt64 = 0
     var retainedBytesOnDisk: UInt64 = 0
+    var retainedHeadBytes: Int = 0
+    var retainedTailBytes: Int = 0
+    var neverWrittenDiscardedBytes: UInt64 = 0
+    var retentionTrimmedBytes: UInt64 = 0
     var discardEvents: Int = 0
-    var discardedBytes: UInt64 = 0
+    var physicalWriteBytes: UInt64 = 0
     var physicalRewriteBytes: UInt64 = 0
     var isCompacted: Bool = false
+    var diskPayloadKnown: Bool = true
     var status: StreamPersistenceStatus = .active
 
     // Stage outcomes
@@ -516,9 +538,34 @@ private final class StreamState {
     var headBuffer = Data()
     var tailBuffer = Data()
 
+    var committedBytes: UInt64 { landedUniqueBytes }
+    var discardedBytes: UInt64 { neverWrittenDiscardedBytes + retentionTrimmedBytes }
+
     init(stream: DiagnosticStreamKind, fileName: String) {
         self.stream = stream
         self.fileName = fileName
+    }
+
+    func addPhysicalWrite(bytes: Int, sink: DiagnosticDiskSink) {
+        guard bytes > 0 else { return }
+        let (newVal, overflow) = physicalWriteBytes.addingReportingOverflow(UInt64(bytes))
+        if overflow {
+            sink.hasCounterOverflow = true
+            physicalWriteBytes = UInt64.max
+        } else {
+            physicalWriteBytes = newVal
+        }
+    }
+
+    func addPhysicalRewrite(bytes: Int, sink: DiagnosticDiskSink) {
+        guard bytes > 0 else { return }
+        let (newVal, overflow) = physicalRewriteBytes.addingReportingOverflow(UInt64(bytes))
+        if overflow {
+            sink.hasCounterOverflow = true
+            physicalRewriteBytes = UInt64.max
+        } else {
+            physicalRewriteBytes = newVal
+        }
     }
 
     func toRecord() -> StreamDiskRecord {
@@ -527,13 +574,18 @@ private final class StreamState {
             fileName: fileName,
             totalAdmittedBytes: totalAdmittedBytes,
             committedBytes: committedBytes,
+            landedUniqueBytes: landedUniqueBytes,
             retainedBytesOnDisk: retainedBytesOnDisk,
-            retainedHeadBytes: headBuffer.count,
-            retainedTailBytes: tailBuffer.count,
+            retainedHeadBytes: retainedHeadBytes,
+            retainedTailBytes: retainedTailBytes,
+            neverWrittenDiscardedBytes: neverWrittenDiscardedBytes,
+            retentionTrimmedBytes: retentionTrimmedBytes,
             discardEvents: discardEvents,
             discardedBytes: discardedBytes,
+            physicalWriteBytes: physicalWriteBytes,
             physicalRewriteBytes: physicalRewriteBytes,
             isCompacted: isCompacted,
+            diskPayloadKnown: diskPayloadKnown,
             status: status,
             openOutcome: openOutcome,
             writeOutcome: writeOutcome,
@@ -563,7 +615,8 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
     private var isSealed: Bool = false
     private var terminalReceipt: DiagnosticDiskSinkReceipt?
     private var activeError: DiagnosticDiskSinkError?
-    private var hasCounterOverflow: Bool = false
+    private var cleanupError: DiagnosticDiskSinkError?
+    fileprivate(set) var hasCounterOverflow: Bool = false
 
     // Metadata stage outcomes
     private var metadataRecord = MetadataPublicationRecord()
@@ -573,13 +626,13 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
     private var createdFileNames: Set<String> = []
 
     public init(
-        directoryURL: URL,
+        rootDirectoryURL: URL,
+        sessionName: String? = nil,
         sessionId: UUID = UUID(),
         configuration: DiagnosticDiskSinkConfiguration = .default,
         fileAdapter: DiskSinkFileAdapter = POSIXDiskSinkFileAdapter()
     ) throws {
         self.sessionId = sessionId
-        self.directoryURL = directoryURL
         self.configuration = configuration
         self.fileAdapter = fileAdapter
 
@@ -590,82 +643,113 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
             .stderr: stderrState
         ]
 
-        try setupDirectoryAndFiles()
+        guard rootDirectoryURL.isFileURL else {
+            throw DiagnosticDiskSinkError.directoryError("Root directory URL must be a file URL: \(rootDirectoryURL)")
+        }
+        let rootPath = rootDirectoryURL.standardizedFileURL.path
+        guard rootPath.hasPrefix("/") else {
+            throw DiagnosticDiskSinkError.directoryError("Root directory must be an absolute path: \(rootPath)")
+        }
+        let rootComponents = rootDirectoryURL.pathComponents.filter { $0 != "/" && !$0.isEmpty }
+        if rootComponents.contains("..") || rootComponents.contains(".") {
+            throw DiagnosticDiskSinkError.directoryError("Root path contains invalid components (. or ..)")
+        }
+
+        let childName = sessionName ?? "session-\(sessionId.uuidString)"
+        if childName.isEmpty || childName.contains("/") || childName == "." || childName == ".." {
+            throw DiagnosticDiskSinkError.directoryError("Invalid session name: '\(childName)'")
+        }
+
+        self.directoryURL = rootDirectoryURL.appendingPathComponent(childName)
+
+        try setupDirectoryAndFiles(rootComponents: rootComponents, childName: childName)
+    }
+
+    public convenience init(
+        directoryURL: URL,
+        sessionId: UUID = UUID(),
+        configuration: DiagnosticDiskSinkConfiguration = .default,
+        fileAdapter: DiskSinkFileAdapter = POSIXDiskSinkFileAdapter()
+    ) throws {
+        let parent = directoryURL.deletingLastPathComponent()
+        let child = directoryURL.lastPathComponent
+        try self.init(
+            rootDirectoryURL: parent,
+            sessionName: child,
+            sessionId: sessionId,
+            configuration: configuration,
+            fileAdapter: fileAdapter
+        )
     }
 
     deinit {
-        // Safe, non-throwing cleanup of still-open descriptors
         for state in streams.values {
             if state.fd >= 0 {
-                _ = try? fileAdapter.close(fd: state.fd)
+                let fdToClose = state.fd
                 state.fd = -1
+                _ = try? fileAdapter.close(fd: fdToClose)
             }
         }
         if dirFd >= 0 {
-            _ = try? fileAdapter.close(fd: dirFd)
+            let fdToClose = dirFd
             dirFd = -1
+            _ = try? fileAdapter.close(fd: fdToClose)
         }
     }
 
-    // MARK: - Setup & Validation
+    // MARK: - Setup & Directory Acquisition
 
-    private func setupDirectoryAndFiles() throws {
-        let dirPath = directoryURL.path
-
-        // Check symlinks along the path
-        if fileAdapter.checkSymlinkAncestors(path: dirPath) || fileAdapter.isSymbolicLink(path: dirPath) {
-            let error = DiagnosticDiskSinkError.symlinkRejected("Directory path or ancestor is a symbolic link: \(dirPath)")
-            self.activeError = error
-            throw error
-        }
-
-        // Fresh session directory creation or verification
-        do {
-            try fileAdapter.createDirectory(path: dirPath, mode: 0o700)
-            self.createdDirectory = true
-        } catch let err as DiagnosticDiskSinkError {
-            if case let .ioError(_, errno, _, _) = err, errno == EEXIST {
-                // Directory exists: verify it is a valid directory
-                if !fileAdapter.isDirectory(path: dirPath) {
-                    let error = DiagnosticDiskSinkError.directoryError("Path exists and is not a directory: \(dirPath)")
-                    self.activeError = error
-                    throw error
+    private func setupDirectoryAndFiles(rootComponents: [String], childName: String) throws {
+        // 1. Component-relative walk of rootComponents starting from /
+        var currentFd = try fileAdapter.openRootDirectory()
+        for comp in rootComponents {
+            do {
+                let nextFd = try fileAdapter.openDirectoryAt(parentFd: currentFd, component: comp)
+                let oldFd = currentFd
+                currentFd = -1
+                _ = try? fileAdapter.close(fd: oldFd)
+                currentFd = nextFd
+            } catch {
+                if currentFd >= 0 {
+                    let oldFd = currentFd
+                    currentFd = -1
+                    _ = try? fileAdapter.close(fd: oldFd)
                 }
-            } else {
-                self.activeError = err
-                throw err
-            }
-        }
-
-        // Open and anchor on directory descriptor
-        do {
-            self.dirFd = try fileAdapter.openDirectory(path: dirPath)
-        } catch let err as DiagnosticDiskSinkError {
-            self.activeError = err
-            cleanupCreatedResourcesOnSetupFailure()
-            throw err
-        } catch {
-            let wrapped = DiagnosticDiskSinkError.ioError(operation: .directoryOpen, errno: EIO, message: "\(error)")
-            self.activeError = wrapped
-            cleanupCreatedResourcesOnSetupFailure()
-            throw wrapped
-        }
-
-        // Verify destination files do not collide inside directory
-        let expectedFiles = ["stdout.bin", "stderr.bin", "persistence.json"]
-        for file in expectedFiles {
-            if fileAdapter.fileExistsAt(dirFd: dirFd, fileName: file) {
-                let error = DiagnosticDiskSinkError.fileCollision("File collision detected; target already exists: \(file)")
-                self.activeError = error
-                cleanupCreatedResourcesOnSetupFailure()
                 throw error
             }
         }
+        let parentFd = currentFd
 
-        // Open payload stream files anchored to dirFd
+        // 2. Exclusively create fresh private session child
+        do {
+            try fileAdapter.createDirectoryAt(parentFd: parentFd, component: childName, mode: 0o700)
+            self.createdDirectory = true
+        } catch {
+            let oldFd = parentFd
+            _ = try? fileAdapter.close(fd: oldFd)
+            throw error
+        }
+
+        // 3. Acquire child directory handle
+        do {
+            self.dirFd = try fileAdapter.openDirectoryAt(parentFd: parentFd, component: childName)
+        } catch {
+            if createdDirectory {
+                _ = try? fileAdapter.removeDirectoryAt(parentFd: parentFd, component: childName)
+                createdDirectory = false
+            }
+            let oldFd = parentFd
+            _ = try? fileAdapter.close(fd: oldFd)
+            throw error
+        }
+
+        // 4. Open stream payload files inside dirFd
         for streamKind in DiagnosticStreamKind.allCases {
             guard let state = streams[streamKind] else { continue }
             do {
+                if fileAdapter.fileExistsAt(dirFd: dirFd, fileName: state.fileName) {
+                    throw DiagnosticDiskSinkError.fileCollision("Target file collision: \(state.fileName)")
+                }
                 let fd = try fileAdapter.openAt(dirFd: dirFd, fileName: state.fileName, flags: O_RDWR | O_CREAT | O_EXCL, mode: 0o600)
                 state.fd = fd
                 state.openOutcome = .succeeded
@@ -673,45 +757,94 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
             } catch let err as DiagnosticDiskSinkError {
                 if case let .ioError(op, code, msg, _) = err {
                     state.openOutcome = .failed(operation: op, errno: code, message: msg)
+                } else if case .fileCollision = err {
+                    state.openOutcome = .failed(operation: .open, errno: EEXIST, message: "\(err)")
                 } else {
                     state.openOutcome = .failed(operation: .open, errno: EACCES, message: "\(err)")
                 }
                 self.activeError = err
-                cleanupCreatedResourcesOnSetupFailure()
-                throw err
+                let cleanupErr = cleanupResourcesOnSetupFailure(parentFd: parentFd, childName: childName)
+                let oldFd = parentFd
+                _ = try? fileAdapter.close(fd: oldFd)
+                throw DiagnosticDiskSinkError.setupFailed(primary: err, cleanupFailure: cleanupErr)
             } catch {
                 let wrapped = DiagnosticDiskSinkError.ioError(operation: .open, errno: EIO, message: "\(error)")
                 state.openOutcome = .failed(operation: .open, errno: EIO, message: "\(error)")
                 self.activeError = wrapped
-                cleanupCreatedResourcesOnSetupFailure()
-                throw wrapped
+                let cleanupErr = cleanupResourcesOnSetupFailure(parentFd: parentFd, childName: childName)
+                let oldFd = parentFd
+                _ = try? fileAdapter.close(fd: oldFd)
+                throw DiagnosticDiskSinkError.setupFailed(primary: wrapped, cleanupFailure: cleanupErr)
             }
         }
+
+        // 5. Setup succeeded: close parentFd
+        let oldFd = parentFd
+        _ = try? fileAdapter.close(fd: oldFd)
     }
 
-    private func cleanupCreatedResourcesOnSetupFailure() {
+    private func cleanupResourcesOnSetupFailure(parentFd: Int32, childName: String) -> DiagnosticDiskSinkError? {
+        var firstCleanupErr: DiagnosticDiskSinkError? = nil
+
         for state in streams.values {
             if state.fd >= 0 {
-                _ = try? fileAdapter.close(fd: state.fd)
+                let fdToClose = state.fd
                 state.fd = -1
+                do {
+                    try fileAdapter.close(fd: fdToClose)
+                } catch let err as DiagnosticDiskSinkError {
+                    if firstCleanupErr == nil { firstCleanupErr = err }
+                } catch {
+                    if firstCleanupErr == nil {
+                        firstCleanupErr = .ioError(operation: .close, errno: EIO, message: "\(error)")
+                    }
+                }
             }
         }
+
         for fileName in createdFileNames {
             if dirFd >= 0 {
-                _ = try? fileAdapter.unlinkAt(dirFd: dirFd, fileName: fileName)
+                do {
+                    try fileAdapter.unlinkAt(dirFd: dirFd, fileName: fileName)
+                } catch let err as DiagnosticDiskSinkError {
+                    if firstCleanupErr == nil { firstCleanupErr = err }
+                } catch {
+                    if firstCleanupErr == nil {
+                        firstCleanupErr = .ioError(operation: .cleanup, errno: EIO, message: "\(error)")
+                    }
+                }
             }
         }
         createdFileNames.removeAll()
 
         if dirFd >= 0 {
-            _ = try? fileAdapter.close(fd: dirFd)
+            let fdToClose = dirFd
             dirFd = -1
+            do {
+                try fileAdapter.close(fd: fdToClose)
+            } catch let err as DiagnosticDiskSinkError {
+                if firstCleanupErr == nil { firstCleanupErr = err }
+            } catch {
+                if firstCleanupErr == nil {
+                    firstCleanupErr = .ioError(operation: .close, errno: EIO, message: "\(error)")
+                }
+            }
         }
 
         if createdDirectory {
-            _ = try? fileAdapter.removeDirectory(path: directoryURL.path)
-            createdDirectory = false
+            do {
+                try fileAdapter.removeDirectoryAt(parentFd: parentFd, component: childName)
+                createdDirectory = false
+            } catch let err as DiagnosticDiskSinkError {
+                if firstCleanupErr == nil { firstCleanupErr = err }
+            } catch {
+                if firstCleanupErr == nil {
+                    firstCleanupErr = .ioError(operation: .cleanup, errno: EIO, message: "\(error)")
+                }
+            }
         }
+
+        return firstCleanupErr
     }
 
     // MARK: - Synchronous Ingress Writing
@@ -743,14 +876,12 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
             state.totalAdmittedBytes = newAdmitted
         }
 
-        // Ingest into in-memory buffers (preserving startup head before any truncation)
-        ingestIntoMemoryBuffers(state: state, chunk: data)
-
         let prospectiveDiskBytes = Int64(state.retainedBytesOnDisk) + Int64(data.count)
         if prospectiveDiskBytes <= configuration.maxBytesPerStream {
+            ingestIntoMemoryBuffers(state: state, chunk: data)
             try writeUnderCap(state: state, data: data)
         } else {
-            try compactAndRewrite(state: state)
+            try compactAndRewrite(state: state, incomingChunk: data)
         }
     }
 
@@ -780,40 +911,53 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
     private func writeUnderCap(state: StreamState, data: Data) throws {
         do {
             let written = try fileAdapter.write(fd: state.fd, data: data)
-            state.committedBytes += UInt64(written)
+            state.addPhysicalWrite(bytes: written, sink: self)
+            state.landedUniqueBytes += UInt64(written)
             state.retainedBytesOnDisk += UInt64(written)
+            state.retainedHeadBytes = min(configuration.headBudget, Int(state.retainedBytesOnDisk))
+            state.retainedTailBytes = max(0, Int(state.retainedBytesOnDisk) - state.retainedHeadBytes)
+            state.diskPayloadKnown = true
 
             if written < data.count {
-                // Short write: partial data landed on disk
                 state.status = .failed
-                let shortError = DiagnosticDiskSinkError.ioError(
+                let shortErr = DiagnosticDiskSinkError.shortWrite(
                     operation: .write,
-                    errno: ENOSPC,
-                    message: "Short write: committed \(written) of \(data.count) bytes",
-                    bytesCommitted: nil // Already added above
+                    bytesCommitted: written,
+                    expectedBytes: data.count
                 )
-                state.writeOutcome = .failed(operation: .write, errno: ENOSPC, message: "Short write: \(written)/\(data.count)")
-                failClosed(error: shortError)
-                throw shortError
+                state.writeOutcome = .failed(operation: .write, errno: 0, message: "Short write: committed \(written) of \(data.count) bytes")
+                failClosed(error: shortErr)
+                throw shortErr
             }
             state.writeOutcome = .succeeded
         } catch let err as DiagnosticDiskSinkError {
+            state.status = .failed
             if case let .ioError(op, code, msg, partial) = err {
                 if let partialCount = partial {
-                    state.committedBytes += UInt64(partialCount)
+                    state.addPhysicalWrite(bytes: partialCount, sink: self)
+                    state.landedUniqueBytes += UInt64(partialCount)
                     state.retainedBytesOnDisk += UInt64(partialCount)
+                    state.retainedHeadBytes = min(configuration.headBudget, Int(state.retainedBytesOnDisk))
+                    state.retainedTailBytes = max(0, Int(state.retainedBytesOnDisk) - state.retainedHeadBytes)
+                    state.diskPayloadKnown = true
+                } else {
+                    state.diskPayloadKnown = false
                 }
                 state.writeOutcome = .failed(operation: op, errno: code, message: msg)
+            } else if case let .shortWrite(op, written, expected) = err {
+                state.diskPayloadKnown = true
+                state.writeOutcome = .failed(operation: op, errno: 0, message: "Short write: committed \(written) of \(expected) bytes")
             } else {
+                state.diskPayloadKnown = false
                 state.writeOutcome = .failed(operation: .write, errno: EIO, message: "\(err)")
             }
-            state.status = .failed
             failClosed(error: err)
             throw err
         } catch {
+            state.status = .failed
+            state.diskPayloadKnown = false
             let wrapped = DiagnosticDiskSinkError.ioError(operation: .write, errno: EIO, message: "\(error)")
             state.writeOutcome = .failed(operation: .write, errno: EIO, message: "\(error)")
-            state.status = .failed
             failClosed(error: wrapped)
             throw wrapped
         }
@@ -821,76 +965,137 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
 
     // MARK: - Bounded Compaction Without Markers
 
-    private func compactAndRewrite(state: StreamState) throws {
+    private func compactAndRewrite(state: StreamState, incomingChunk: Data) throws {
         state.discardEvents += 1
+
+        let roomInHeadBeforeChunk = max(0, configuration.headBudget - state.headBuffer.count)
+        let headContribution = min(incomingChunk.count, roomInHeadBeforeChunk)
+        let tailPortionCount = incomingChunk.count - headContribution
+
+        ingestIntoMemoryBuffers(state: state, chunk: incomingChunk)
 
         let headCount = state.headBuffer.count
         let maxAllowedTail = max(0, min(configuration.tailBudget, Int(configuration.maxBytesPerStream) - headCount))
         let suffixData = Data(state.tailBuffer.suffix(maxAllowedTail))
 
-        // Discarded payload bytes = total admitted - (head + suffix)
-        let retainedTotal = UInt64(headCount + suffixData.count)
-        if state.totalAdmittedBytes >= retainedTotal {
-            state.discardedBytes = state.totalAdmittedBytes - retainedTotal
+        let suffixPortionFromChunk = min(tailPortionCount, suffixData.count)
+        let retainedFromChunk = headContribution + suffixPortionFromChunk
+        let neverWrittenFromChunk = incomingChunk.count - retainedFromChunk
+
+        let (newNeverWritten, nwOverflow) = state.neverWrittenDiscardedBytes.addingReportingOverflow(UInt64(neverWrittenFromChunk))
+        if nwOverflow {
+            hasCounterOverflow = true
+            state.neverWrittenDiscardedBytes = UInt64.max
+        } else {
+            state.neverWrittenDiscardedBytes = newNeverWritten
         }
 
-        // On-disk in-place compaction:
-        // 1. Ensure startup head is on disk at offset 0
-        // 2. Truncate file to headCount first (drops prior tail)
-        // 3. Write suffixData at offset headCount
         do {
             _ = try fileAdapter.seek(fd: state.fd, offset: 0, whence: SEEK_SET)
+
             let headWritten = try fileAdapter.write(fd: state.fd, data: state.headBuffer)
+            state.addPhysicalWrite(bytes: headWritten, sink: self)
+            state.addPhysicalRewrite(bytes: headWritten, sink: self)
+
             if headWritten < headCount {
-                throw DiagnosticDiskSinkError.ioError(
+                throw DiagnosticDiskSinkError.shortWrite(
                     operation: .write,
-                    errno: ENOSPC,
-                    message: "Short write while writing head during compaction",
-                    bytesCommitted: headWritten
+                    bytesCommitted: headWritten,
+                    expectedBytes: headCount
                 )
             }
+
             try fileAdapter.truncate(fd: state.fd, length: off_t(headCount))
             state.retainedBytesOnDisk = UInt64(headCount)
+            state.retainedHeadBytes = headCount
+            state.retainedTailBytes = 0
+            state.diskPayloadKnown = true
 
             if !suffixData.isEmpty {
-                let suffixWritten = try fileAdapter.write(fd: state.fd, data: suffixData)
-                state.physicalRewriteBytes += UInt64(suffixWritten)
-                state.retainedBytesOnDisk += UInt64(suffixWritten)
+                do {
+                    let suffixWritten = try fileAdapter.write(fd: state.fd, data: suffixData)
+                    state.addPhysicalWrite(bytes: suffixWritten, sink: self)
+                    state.addPhysicalRewrite(bytes: suffixWritten, sink: self)
+                    state.retainedBytesOnDisk += UInt64(suffixWritten)
+                    state.retainedTailBytes = suffixWritten
 
-                if suffixWritten < suffixData.count {
-                    throw DiagnosticDiskSinkError.ioError(
-                        operation: .write,
-                        errno: ENOSPC,
-                        message: "Short write during compaction: wrote \(suffixWritten)/\(suffixData.count)",
-                        bytesCommitted: suffixWritten
-                    )
+                    if suffixWritten < suffixData.count {
+                        throw DiagnosticDiskSinkError.shortWrite(
+                            operation: .write,
+                            bytesCommitted: suffixWritten,
+                            expectedBytes: suffixData.count
+                        )
+                    }
+                } catch let err as DiagnosticDiskSinkError {
+                    if case let .ioError(op, code, msg, partial) = err {
+                        if let partialBytes = partial {
+                            state.addPhysicalWrite(bytes: partialBytes, sink: self)
+                            state.addPhysicalRewrite(bytes: partialBytes, sink: self)
+                            state.retainedBytesOnDisk = UInt64(headCount + partialBytes)
+                            state.retainedTailBytes = partialBytes
+                            state.diskPayloadKnown = true
+                        } else {
+                            state.diskPayloadKnown = false
+                        }
+                        state.compactionOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else if case let .shortWrite(op, committed, expected) = err {
+                        state.diskPayloadKnown = true
+                        state.compactionOutcome = .failed(operation: op, errno: 0, message: "Short write: committed \(committed) of \(expected) bytes")
+                    } else {
+                        state.diskPayloadKnown = false
+                        state.compactionOutcome = .failed(operation: .write, errno: EIO, message: "\(err)")
+                    }
+                    state.status = .partiallyCompacted
+                    failClosed(error: err)
+                    throw err
+                } catch {
+                    state.diskPayloadKnown = false
+                    let wrapped = DiagnosticDiskSinkError.ioError(operation: .write, errno: EIO, message: "\(error)")
+                    state.compactionOutcome = .failed(operation: .write, errno: EIO, message: "\(error)")
+                    state.status = .partiallyCompacted
+                    failClosed(error: wrapped)
+                    throw wrapped
                 }
             }
 
-            state.isCompacted = true
             state.tailBuffer = suffixData
-            state.committedBytes = state.totalAdmittedBytes
+            state.isCompacted = true
             state.compactionOutcome = .succeeded
+
+            if state.totalAdmittedBytes >= state.neverWrittenDiscardedBytes {
+                state.landedUniqueBytes = state.totalAdmittedBytes - state.neverWrittenDiscardedBytes
+            }
+            if state.landedUniqueBytes >= state.retainedBytesOnDisk {
+                state.retentionTrimmedBytes = state.landedUniqueBytes - state.retainedBytesOnDisk
+            }
         } catch let err as DiagnosticDiskSinkError {
             state.status = .partiallyCompacted
-            if case let .ioError(op, code, msg, _) = err {
-                state.compactionOutcome = .failed(operation: op, errno: code, message: msg)
-            } else {
-                state.compactionOutcome = .failed(operation: .write, errno: EIO, message: "\(err)")
+            if state.compactionOutcome == .notAttempted {
+                if case let .ioError(op, code, msg, _) = err {
+                    state.compactionOutcome = .failed(operation: op, errno: code, message: msg)
+                } else if case let .shortWrite(op, committed, expected) = err {
+                    state.compactionOutcome = .failed(operation: op, errno: 0, message: "Short write: committed \(committed) of \(expected) bytes")
+                } else {
+                    state.compactionOutcome = .failed(operation: .write, errno: EIO, message: "\(err)")
+                }
             }
             failClosed(error: err)
             throw err
         } catch {
             state.status = .partiallyCompacted
+            if state.compactionOutcome == .notAttempted {
+                state.compactionOutcome = .failed(operation: .write, errno: EIO, message: "\(error)")
+            }
             let wrapped = DiagnosticDiskSinkError.ioError(operation: .write, errno: EIO, message: "\(error)")
-            state.compactionOutcome = .failed(operation: .write, errno: EIO, message: "\(error)")
             failClosed(error: wrapped)
             throw wrapped
         }
     }
 
     private func failClosed(error: DiagnosticDiskSinkError) {
-        self.activeError = error
+        if self.activeError == nil {
+            self.activeError = error
+        }
     }
 
     // MARK: - Explicit Abort / Abandonment
@@ -905,24 +1110,42 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
 
         for state in streams.values {
             if state.fd >= 0 {
+                let fdToClose = state.fd
+                state.fd = -1
                 do {
-                    try fileAdapter.close(fd: state.fd)
+                    try fileAdapter.close(fd: fdToClose)
                     state.closeOutcome = .succeeded
                 } catch let err as DiagnosticDiskSinkError {
                     if case let .ioError(op, code, msg, _) = err {
                         state.closeOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else {
+                        state.closeOutcome = .failed(operation: .close, errno: EIO, message: "\(err)")
                     }
+                    if activeError == nil { activeError = err }
                 } catch {
                     state.closeOutcome = .failed(operation: .close, errno: EIO, message: "\(error)")
+                    if activeError == nil {
+                        activeError = .ioError(operation: .close, errno: EIO, message: "\(error)")
+                    }
                 }
-                state.fd = -1
             }
-            state.status = .failed
+            if state.status == .active {
+                state.status = .failed
+            }
         }
 
         if dirFd >= 0 {
-            _ = try? fileAdapter.close(fd: dirFd)
+            let fdToClose = dirFd
             dirFd = -1
+            do {
+                try fileAdapter.close(fd: fdToClose)
+            } catch let err as DiagnosticDiskSinkError {
+                if cleanupError == nil { cleanupError = err }
+            } catch {
+                if cleanupError == nil {
+                    cleanupError = .ioError(operation: .close, errno: EIO, message: "\(error)")
+                }
+            }
         }
 
         let receipt = DiagnosticDiskSinkReceipt(
@@ -936,6 +1159,7 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
             parentDirectorySynced: false,
             isSealed: true,
             failure: activeError ?? DiagnosticDiskSinkError.sealed,
+            cleanupError: cleanupError,
             hasCounterOverflow: hasCounterOverflow
         )
         self.terminalReceipt = receipt
@@ -951,9 +1175,10 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
         }
         isSealed = true
 
-        // 1. Flush & sync open payload streams
+        // 1. Flush & close payload streams
         for state in streams.values {
             if state.fd >= 0 {
+                // Sync
                 do {
                     try fileAdapter.sync(fd: state.fd)
                     state.syncOutcome = .succeeded
@@ -961,6 +1186,8 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
                     if activeError == nil { activeError = err }
                     if case let .ioError(op, code, msg, _) = err {
                         state.syncOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else {
+                        state.syncOutcome = .failed(operation: .sync, errno: EIO, message: "\(err)")
                     }
                     state.status = .failed
                 } catch {
@@ -970,13 +1197,18 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
                     state.status = .failed
                 }
 
+                // Close: disarm BEFORE close
+                let fdToClose = state.fd
+                state.fd = -1
                 do {
-                    try fileAdapter.close(fd: state.fd)
+                    try fileAdapter.close(fd: fdToClose)
                     state.closeOutcome = .succeeded
                 } catch let err as DiagnosticDiskSinkError {
                     if activeError == nil { activeError = err }
                     if case let .ioError(op, code, msg, _) = err {
                         state.closeOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else {
+                        state.closeOutcome = .failed(operation: .close, errno: EIO, message: "\(err)")
                     }
                     state.status = .failed
                 } catch {
@@ -985,7 +1217,6 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
                     state.closeOutcome = .failed(operation: .close, errno: EIO, message: "\(error)")
                     state.status = .failed
                 }
-                state.fd = -1
             }
 
             if state.status == .active {
@@ -1001,58 +1232,107 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
         var sidecarURL: URL? = nil
         var parentDirSynced = false
 
-        let sidecar = DiagnosticPersistenceSidecar(
-            sinkSessionId: sessionId,
-            stdoutRecord: stdoutRecord,
-            stderrRecord: stderrRecord,
-            metadataRecord: metadataRecord,
-            maxBytesPerStream: configuration.maxBytesPerStream,
-            headBudget: configuration.headBudget,
-            tailBudget: configuration.tailBudget,
-            isSealed: true,
-            finalOutcome: (activeError == nil) ? "clean" : "failed"
-        )
-
-        let tmpFileName = ".persistence.json.tmp.\(sessionId.uuidString)"
-        let targetFileName = "persistence.json"
-
         if dirFd >= 0 {
+            let tmpFileName = ".persistence.json.tmp.\(sessionId.uuidString)"
+            let targetFileName = "persistence.json"
+            var didCreateTempSidecar = false
+            var tmpFd: Int32 = -1
+
+            let sidecar = DiagnosticPersistenceSidecar(
+                sinkSessionId: sessionId,
+                stdoutRecord: stdoutRecord,
+                stderrRecord: stderrRecord,
+                metadataRecord: metadataRecord,
+                maxBytesPerStream: configuration.maxBytesPerStream,
+                headBudget: configuration.headBudget,
+                tailBudget: configuration.tailBudget,
+                isSealed: true,
+                finalOutcome: activeError == nil ? "success" : "failure"
+            )
+
             do {
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 let jsonData = try encoder.encode(sidecar)
-
-                if jsonData.count > configuration.maxSidecarBytes {
-                    throw DiagnosticDiskSinkError.sidecarTooLarge(
-                        byteCount: jsonData.count,
-                        maxBytes: configuration.maxSidecarBytes
-                    )
+                guard jsonData.count <= configuration.maxSidecarBytes else {
+                    throw DiagnosticDiskSinkError.sidecarTooLarge(byteCount: jsonData.count, maxBytes: configuration.maxSidecarBytes)
                 }
 
-                // Open temporary staging file anchored to dirFd
-                let tmpFd = try fileAdapter.openAt(dirFd: dirFd, fileName: tmpFileName, flags: O_WRONLY | O_CREAT | O_EXCL, mode: 0o600)
-                metadataRecord.createOutcome = .succeeded
-
-                // Write and sync sidecar with strict ownership cleanup
+                // Open temp file exclusively
                 do {
-                    let written = try fileAdapter.write(fd: tmpFd, data: jsonData)
-                    if written < jsonData.count {
-                        throw DiagnosticDiskSinkError.ioError(operation: .write, errno: ENOSPC, message: "Short write on sidecar")
+                    tmpFd = try fileAdapter.openAt(dirFd: dirFd, fileName: tmpFileName, flags: O_RDWR | O_CREAT | O_EXCL, mode: 0o600)
+                    didCreateTempSidecar = true
+                    metadataRecord.createOutcome = .succeeded
+                } catch let err as DiagnosticDiskSinkError {
+                    if case let .ioError(op, code, msg, _) = err {
+                        metadataRecord.createOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else if case .fileCollision = err {
+                        metadataRecord.createOutcome = .failed(operation: .open, errno: EEXIST, message: "\(err)")
+                    } else {
+                        metadataRecord.createOutcome = .failed(operation: .open, errno: EACCES, message: "\(err)")
                     }
-                    metadataRecord.writeOutcome = .succeeded
-
-                    try fileAdapter.sync(fd: tmpFd)
-                    metadataRecord.syncOutcome = .succeeded
-
-                    try fileAdapter.close(fd: tmpFd)
-                    metadataRecord.closeOutcome = .succeeded
+                    throw err
                 } catch {
-                    _ = try? fileAdapter.close(fd: tmpFd)
-                    _ = try? fileAdapter.unlinkAt(dirFd: dirFd, fileName: tmpFileName)
+                    metadataRecord.createOutcome = .failed(operation: .open, errno: EIO, message: "\(error)")
                     throw error
                 }
 
-                // Atomic no-overwrite publish
+                // Write sidecar data
+                do {
+                    let written = try fileAdapter.write(fd: tmpFd, data: jsonData)
+                    if written < jsonData.count {
+                        throw DiagnosticDiskSinkError.shortWrite(operation: .write, bytesCommitted: written, expectedBytes: jsonData.count)
+                    }
+                    metadataRecord.writeOutcome = .succeeded
+                } catch let err as DiagnosticDiskSinkError {
+                    if case let .ioError(op, code, msg, _) = err {
+                        metadataRecord.writeOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else if case let .shortWrite(op, written, expected) = err {
+                        metadataRecord.writeOutcome = .failed(operation: op, errno: 0, message: "Short write: committed \(written) of \(expected) bytes")
+                    } else {
+                        metadataRecord.writeOutcome = .failed(operation: .write, errno: EIO, message: "\(err)")
+                    }
+                    throw err
+                } catch {
+                    metadataRecord.writeOutcome = .failed(operation: .write, errno: EIO, message: "\(error)")
+                    throw error
+                }
+
+                // Sync sidecar
+                do {
+                    try fileAdapter.sync(fd: tmpFd)
+                    metadataRecord.syncOutcome = .succeeded
+                } catch let err as DiagnosticDiskSinkError {
+                    if case let .ioError(op, code, msg, _) = err {
+                        metadataRecord.syncOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else {
+                        metadataRecord.syncOutcome = .failed(operation: .sync, errno: EIO, message: "\(err)")
+                    }
+                    throw err
+                } catch {
+                    metadataRecord.syncOutcome = .failed(operation: .sync, errno: EIO, message: "\(error)")
+                    throw error
+                }
+
+                // Close sidecar: disarm BEFORE close
+                let sidecarFdToClose = tmpFd
+                tmpFd = -1
+                do {
+                    try fileAdapter.close(fd: sidecarFdToClose)
+                    metadataRecord.closeOutcome = .succeeded
+                } catch let err as DiagnosticDiskSinkError {
+                    if case let .ioError(op, code, msg, _) = err {
+                        metadataRecord.closeOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else {
+                        metadataRecord.closeOutcome = .failed(operation: .close, errno: EIO, message: "\(err)")
+                    }
+                    throw err
+                } catch {
+                    metadataRecord.closeOutcome = .failed(operation: .close, errno: EIO, message: "\(error)")
+                    throw error
+                }
+
+                // Publish sidecar via atomic rename
                 do {
                     try fileAdapter.publishSidecar(dirFd: dirFd, tmpName: tmpFileName, targetName: targetFileName)
                     sidecarPublished = true
@@ -1062,6 +1342,10 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
                 } catch let err as DiagnosticDiskSinkError {
                     if case let .ioError(op, code, msg, _) = err {
                         metadataRecord.publishOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else if case .fileCollision = err {
+                        metadataRecord.publishOutcome = .failed(operation: .rename, errno: EEXIST, message: "\(err)")
+                    } else {
+                        metadataRecord.publishOutcome = .failed(operation: .rename, errno: EIO, message: "\(err)")
                     }
                     throw err
                 } catch {
@@ -1069,7 +1353,7 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
                     throw error
                 }
 
-                // 3. Best-effort directory sync
+                // Directory sync
                 do {
                     try fileAdapter.syncDirectory(dirFd: dirFd)
                     parentDirSynced = true
@@ -1077,22 +1361,45 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
                 } catch let err as DiagnosticDiskSinkError {
                     if case let .ioError(op, code, msg, _) = err {
                         metadataRecord.directorySyncOutcome = .failed(operation: op, errno: code, message: msg)
+                    } else {
+                        metadataRecord.directorySyncOutcome = .failed(operation: .directorySync, errno: EIO, message: "\(err)")
                     }
                 } catch {
                     metadataRecord.directorySyncOutcome = .failed(operation: .directorySync, errno: EIO, message: "\(error)")
                 }
-            } catch let err as DiagnosticDiskSinkError {
-                if activeError == nil { activeError = err }
-                _ = try? fileAdapter.unlinkAt(dirFd: dirFd, fileName: tmpFileName)
             } catch {
-                let wrapped = DiagnosticDiskSinkError.ioError(operation: .rename, errno: EIO, message: "\(error)")
-                if activeError == nil { activeError = wrapped }
-                _ = try? fileAdapter.unlinkAt(dirFd: dirFd, fileName: tmpFileName)
+                if activeError == nil {
+                    if let diskErr = error as? DiagnosticDiskSinkError {
+                        activeError = diskErr
+                    } else {
+                        activeError = DiagnosticDiskSinkError.ioError(operation: .rename, errno: EIO, message: "\(error)")
+                    }
+                }
+                // Cleanup tmpFd if still open
+                if tmpFd >= 0 {
+                    let fdToClose = tmpFd
+                    tmpFd = -1
+                    _ = try? fileAdapter.close(fd: fdToClose)
+                }
+                // ONLY unlink tmp file if creation actually succeeded!
+                if didCreateTempSidecar {
+                    _ = try? fileAdapter.unlinkAt(dirFd: dirFd, fileName: tmpFileName)
+                    didCreateTempSidecar = false
+                }
             }
 
-            // Close dirFd on exit
-            _ = try? fileAdapter.close(fd: dirFd)
+            // Close dirFd: disarm BEFORE close
+            let dirFdToClose = dirFd
             dirFd = -1
+            do {
+                try fileAdapter.close(fd: dirFdToClose)
+            } catch let err as DiagnosticDiskSinkError {
+                if cleanupError == nil { cleanupError = err }
+            } catch {
+                if cleanupError == nil {
+                    cleanupError = .ioError(operation: .close, errno: EIO, message: "\(error)")
+                }
+            }
         }
 
         let receipt = DiagnosticDiskSinkReceipt(
@@ -1106,6 +1413,7 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
             parentDirectorySynced: parentDirSynced,
             isSealed: true,
             failure: activeError,
+            cleanupError: cleanupError,
             hasCounterOverflow: hasCounterOverflow
         )
 
@@ -1119,13 +1427,18 @@ public final class DiagnosticDiskSink: @unchecked Sendable {
             fileName: "\(stream.rawValue).bin",
             totalAdmittedBytes: 0,
             committedBytes: 0,
+            landedUniqueBytes: 0,
             retainedBytesOnDisk: 0,
             retainedHeadBytes: 0,
             retainedTailBytes: 0,
+            neverWrittenDiscardedBytes: 0,
+            retentionTrimmedBytes: 0,
             discardEvents: 0,
             discardedBytes: 0,
+            physicalWriteBytes: 0,
             physicalRewriteBytes: 0,
             isCompacted: false,
+            diskPayloadKnown: false,
             status: .failed,
             openOutcome: .notAttempted,
             writeOutcome: .notAttempted,

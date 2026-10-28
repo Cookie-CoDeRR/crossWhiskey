@@ -3,8 +3,8 @@
 //  WhiskyKitTests
 //
 //  Isolated test suite for DiagnosticDiskSink: verbatim raw byte retention,
-//  compaction without in-band markers, first-chunk-over-cap preservation,
-//  deterministic fault injection, symlink rejection, and atomic no-overwrite publish.
+//  compaction without in-band markers, honest accounting, single-close ownership state machine,
+//  preserved pre-existing files, component-relative directory acquisition, and deterministic fault injection.
 //
 
 import Darwin
@@ -12,449 +12,124 @@ import Foundation
 import Testing
 @testable import WhiskyKit
 
-@Suite("Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt")
-struct DiagnosticDiskSinkTests {
-
-    // MARK: - Worktree-Owned Fixture Root Helper
-
-    private static func makeOwnedFixtureDirectory(testName: String) throws -> URL {
-        let thisFile = URL(fileURLWithPath: #filePath)
-        let worktreeRoot = thisFile
-            .deletingLastPathComponent() // WhiskyKitTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // WhiskyKit
-            .deletingLastPathComponent() // worktree
-        let fixtureRoot = worktreeRoot.appendingPathComponent(".scratch/test-fixtures", isDirectory: true)
-        try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
-        let sessionDir = fixtureRoot.appendingPathComponent("\(testName)-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
-        return sessionDir
-    }
-
-    private static func cleanupFixtureDirectory(_ url: URL) {
-        _ = try? FileManager.default.removeItem(at: url)
-    }
-
-    // MARK: - Test A: Real Owned Files Under Cap
-
-    @Test("Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal")
-    func testRealOwnedFilesUnderCap() throws {
-        let fixtureDir = try Self.makeOwnedFixtureDirectory(testName: "testA")
-        defer { Self.cleanupFixtureDirectory(fixtureDir) }
-
-        let sink = try DiagnosticDiskSink(directoryURL: fixtureDir)
-        defer { _ = sink.abort() }
-
-        // Raw chunks with NUL bytes, high ASCII, and arbitrary byte sequences
-        let stdoutChunk1 = Data([0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD])
-        let stdoutChunk2 = Data("Standard output message with unicode: 🚀\n".utf8)
-        let stderrChunk1 = Data([0x80, 0x81, 0x82, 0x00, 0x00]) // Invalid UTF8 standalone continuation bytes
-        let stderrChunk2 = Data("Standard error alert: failure code 42\n".utf8)
-
-        try sink.write(stream: .stdout, data: stdoutChunk1)
-        try sink.write(stream: .stdout, data: stdoutChunk2)
-        try sink.write(stream: .stderr, data: stderrChunk1)
-        try sink.write(stream: .stderr, data: stderrChunk2)
-
-        let receipt1 = sink.finish()
-        #expect(receipt1.isSealed)
-        #expect(receipt1.sidecarPublished)
-        #expect(receipt1.failure == nil)
-        #expect(receipt1.stdoutRecord.status == .sealed)
-        #expect(receipt1.stderrRecord.status == .sealed)
-
-        let expectedStdoutBytes = stdoutChunk1 + stdoutChunk2
-        let expectedStderrBytes = stderrChunk1 + stderrChunk2
-
-        #expect(receipt1.stdoutRecord.committedBytes == UInt64(expectedStdoutBytes.count))
-        #expect(receipt1.stderrRecord.committedBytes == UInt64(expectedStderrBytes.count))
-        #expect(receipt1.stdoutRecord.retainedBytesOnDisk == UInt64(expectedStdoutBytes.count))
-        #expect(receipt1.stderrRecord.retainedBytesOnDisk == UInt64(expectedStderrBytes.count))
-
-        // Idempotency check: Calling finish again returns the same receipt
-        let receipt2 = sink.finish()
-        #expect(receipt1 == receipt2)
-
-        // Post-seal rejection: Further writes must fail closed with .sealed
-        #expect(throws: DiagnosticDiskSinkError.sealed) {
-            try sink.write(stream: .stdout, data: Data([0x01]))
-        }
-
-        // Reopen and compare exact bytes on disk
-        let stdoutOnDisk = try Data(contentsOf: fixtureDir.appendingPathComponent("stdout.bin"))
-        let stderrOnDisk = try Data(contentsOf: fixtureDir.appendingPathComponent("stderr.bin"))
-        #expect(stdoutOnDisk == expectedStdoutBytes)
-        #expect(stderrOnDisk == expectedStderrBytes)
-
-        // Decodable sidecar validation
-        guard let sidecarURL = receipt1.sidecarURL else {
-            Issue.record("Missing sidecar URL in receipt")
-            return
-        }
-        let sidecarData = try Data(contentsOf: sidecarURL)
-        let decoder = JSONDecoder()
-        let sidecar = try decoder.decode(DiagnosticPersistenceSidecar.self, from: sidecarData)
-        #expect(sidecar.formatVersion == 1)
-        #expect(sidecar.stdoutRecord.committedBytes == UInt64(expectedStdoutBytes.count))
-        #expect(sidecar.stderrRecord.committedBytes == UInt64(expectedStderrBytes.count))
-        #expect(sidecar.finalOutcome == "clean")
-    }
-
-    // MARK: - Test B: Raw Retention & Compaction (Startup Head Preserved, Suffix Kept, No In-Band Markers)
-
-    @Test("Test B: Bounded retention keeps exact startup head, suffix, without in-band markers, and handles first chunk > cap")
-    func testBoundedRetentionRawIntegrity() throws {
-        let fixtureDir = try Self.makeOwnedFixtureDirectory(testName: "testB")
-        defer { Self.cleanupFixtureDirectory(fixtureDir) }
-
-        // --- Case 1: Multiple boundaries under incremental writes ---
-        // Max stream cap: 1000 bytes, Head budget: 200 bytes, Tail budget: 400 bytes, Max chunk: 100 bytes
-        let config = try DiagnosticDiskSinkConfiguration(
-            maxBytesPerStream: 1000,
-            headBudget: 200,
-            tailBudget: 400,
-            maxChunkBytes: 100,
-            tailTrimThreshold: 500,
-            maxSidecarBytes: 16384
-        )
-
-        let sink = try DiagnosticDiskSink(
-            directoryURL: fixtureDir.appendingPathComponent("incremental"),
-            configuration: config
-        )
-        defer { _ = sink.abort() }
-
-        // Write first 200 bytes (fills head exactly: 100 x 'A' + 100 x 'B')
-        let headChunk1 = Data(repeating: 0x41, count: 100)
-        let headChunk2 = Data(repeating: 0x42, count: 100)
-        try sink.write(stream: .stdout, data: headChunk1)
-        try sink.write(stream: .stdout, data: headChunk2)
-
-        // Write 7 more chunks of 100 bytes (total admitted: 200 + 700 = 900 bytes <= 1000)
-        for i in 0..<7 {
-            let chunk = Data(repeating: UInt8(0x30 + i), count: 100)
-            try sink.write(stream: .stdout, data: chunk)
-        }
-
-        // Up to here, no compaction has occurred: 900 bytes on disk
-        let preCompactSize = try Data(contentsOf: fixtureDir.appendingPathComponent("incremental/stdout.bin")).count
-        #expect(preCompactSize == 900)
-
-        // Write 2 more chunks (200 bytes). This pushes prospective size to 1100 > 1000, triggering compaction!
-        let triggerChunk1 = Data(repeating: 0x58, count: 100) // 100 x 'X'
-        let triggerChunk2 = Data(repeating: 0x59, count: 100) // 100 x 'Y'
-        try sink.write(stream: .stdout, data: triggerChunk1)
-        try sink.write(stream: .stdout, data: triggerChunk2)
-
-        let receipt = sink.finish()
-        #expect(receipt.stdoutRecord.isCompacted)
-        #expect(receipt.stdoutRecord.discardEvents > 0)
-        #expect(receipt.stdoutRecord.discardedBytes > 0)
-        #expect(receipt.stdoutRecord.retainedHeadBytes == 200)
-        #expect(receipt.stdoutRecord.retainedTailBytes == 400)
-        #expect(receipt.stdoutRecord.retainedBytesOnDisk == 600)
-        #expect(receipt.stdoutRecord.totalAdmittedBytes == 1100)
-        #expect(receipt.stdoutRecord.committedBytes == 1100) // Does not exceed total admitted
-
-        // Verify stream isolation: stderr was untouched
-        #expect(receipt.stderrRecord.committedBytes == 0)
-        #expect(!receipt.stderrRecord.isCompacted)
-
-        let compactedStdout = try Data(contentsOf: fixtureDir.appendingPathComponent("incremental/stdout.bin"))
-        #expect(compactedStdout.count == 600)
-
-        // Verbatim payload check: NO marker bytes anywhere
-        let stringContent = String(decoding: compactedStdout, as: UTF8.self)
-        #expect(!stringContent.contains("DIAGNOSTIC RETENTION"))
-        #expect(!stringContent.contains("DISCARDED"))
-
-        // Head check: First 200 bytes must match headChunk1 + headChunk2 exactly
-        let preservedHead = compactedStdout.prefix(200)
-        #expect(preservedHead == headChunk1 + headChunk2)
-
-        // Tail check: Last 400 bytes must match exactly the last 400 admitted bytes
-        // The last 400 bytes admitted were: chunk5 (100) + chunk6 (100) + triggerChunk1 (100) + triggerChunk2 (100)
-        let expectedTail = Data(repeating: UInt8(0x30 + 5), count: 100)
-            + Data(repeating: UInt8(0x30 + 6), count: 100)
-            + triggerChunk1
-            + triggerChunk2
-        let preservedTail = compactedStdout.suffix(400)
-        #expect(preservedTail == expectedTail)
-
-        // --- Case 2: First incoming chunk exceeds stream cap ---
-        let configSmall = try DiagnosticDiskSinkConfiguration(
-            maxBytesPerStream: 500,
-            headBudget: 100,
-            tailBudget: 200,
-            maxChunkBytes: 600,
-            tailTrimThreshold: 300,
-            maxSidecarBytes: 16384
-        )
-        let firstChunkSink = try DiagnosticDiskSink(
-            directoryURL: fixtureDir.appendingPathComponent("first-chunk-large"),
-            configuration: configSmall
-        )
-        defer { _ = firstChunkSink.abort() }
-
-        // A single 600-byte chunk exceeds the 500-byte cap
-        var bigChunk = Data()
-        for i in 0..<600 {
-            bigChunk.append(UInt8(i % 256))
-        }
-
-        try firstChunkSink.write(stream: .stdout, data: bigChunk)
-        let firstChunkReceipt = firstChunkSink.finish()
-
-        #expect(firstChunkReceipt.stdoutRecord.isCompacted)
-        #expect(firstChunkReceipt.stdoutRecord.retainedHeadBytes == 100)
-        #expect(firstChunkReceipt.stdoutRecord.retainedTailBytes == 200)
-        #expect(firstChunkReceipt.stdoutRecord.retainedBytesOnDisk == 300)
-        #expect(firstChunkReceipt.stdoutRecord.discardedBytes == 300)
-
-        let firstChunkOnDisk = try Data(contentsOf: fixtureDir.appendingPathComponent("first-chunk-large/stdout.bin"))
-        #expect(firstChunkOnDisk.count == 300)
-        // Check startup head: first 100 bytes match original chunk prefix
-        #expect(firstChunkOnDisk.prefix(100) == bigChunk.prefix(100))
-        // Check tail: last 200 bytes match original chunk suffix
-        #expect(firstChunkOnDisk.suffix(200) == bigChunk.suffix(200))
-    }
-
-    // MARK: - Test C: Configuration Validation & Overflow Rejection
-
-    @Test("Test C: Configuration validation rejects negative, zero, overflow, and huge allocations")
-    func testConfigurationValidation() {
-        // Zero or negative limits
-        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
-            try DiagnosticDiskSinkConfiguration(maxBytesPerStream: 0)
-        }
-        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
-            try DiagnosticDiskSinkConfiguration(headBudget: 0)
-        }
-        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
-            try DiagnosticDiskSinkConfiguration(tailBudget: 0)
-        }
-        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
-            try DiagnosticDiskSinkConfiguration(maxChunkBytes: 0)
-        }
-        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
-            try DiagnosticDiskSinkConfiguration(maxChunkBytes: 70_000) // Exceeds 64 KiB
-        }
-
-        // Max bytes less than head + tail
-        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
-            try DiagnosticDiskSinkConfiguration(
-                maxBytesPerStream: 1000,
-                headBudget: 600,
-                tailBudget: 600
-            )
-        }
-
-        // Unbounded / huge configuration rejection
-        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
-            try DiagnosticDiskSinkConfiguration(maxBytesPerStream: 200 * 1024 * 1024) // 200 MiB exceeds 100 MiB limit
-        }
-    }
-
-    // MARK: - Test D: Deterministic Fault Injection Table
-
-    @Test("Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename")
-    func testFaultInjectionTable() throws {
-        let fixtureDir = try Self.makeOwnedFixtureDirectory(testName: "testD")
-        defer { Self.cleanupFixtureDirectory(fixtureDir) }
-
-        // Case 1: Setup failure on open cleans up created resources
-        let case1Dir = fixtureDir.appendingPathComponent("case1-open-fail")
-        let failingOpenAdapter = MockFaultInjectingFileAdapter()
-        failingOpenAdapter.failOnOpenFileName = "stderr.bin"
-        failingOpenAdapter.openErrno = EACCES
-
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            _ = try DiagnosticDiskSink(directoryURL: case1Dir, fileAdapter: failingOpenAdapter)
-        }
-        // Verify stdout.bin was cleaned up and directory was removed
-        #expect(!FileManager.default.fileExists(atPath: case1Dir.appendingPathComponent("stdout.bin").path))
-        #expect(!FileManager.default.fileExists(atPath: case1Dir.path))
-
-        // Case 2: Short write under cap fails closed, records committed bytes, and marks writeOutcome failed
-        let shortWriteAdapter = MockFaultInjectingFileAdapter()
-        shortWriteAdapter.shortWriteLimit = 30 // Accepts only 30 bytes of a 50-byte chunk
-
-        let sinkShort = try DiagnosticDiskSink(
-            directoryURL: fixtureDir.appendingPathComponent("short"),
-            fileAdapter: shortWriteAdapter
-        )
-        defer { _ = sinkShort.abort() }
-
-        let sample50 = Data(repeating: 0x55, count: 50)
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            try sinkShort.write(stream: .stdout, data: sample50)
-        }
-
-        let receiptShort = sinkShort.finish()
-        #expect(receiptShort.stdoutRecord.committedBytes == 30)
-        #expect(receiptShort.stdoutRecord.retainedBytesOnDisk == 30)
-        #expect(receiptShort.stdoutRecord.status == .failed)
-        if case let .failed(op, errno, _) = receiptShort.stdoutRecord.writeOutcome {
-            #expect(op == .write)
-            #expect(errno == ENOSPC)
-        } else {
-            Issue.record("Expected writeOutcome to be failed")
-        }
-        #expect(receiptShort.failure != nil)
-
-        // Further writes fail closed immediately
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            try sinkShort.write(stream: .stdout, data: Data([0x01]))
-        }
-
-        // Case 3: Truncate failure during compaction marks stream partiallyCompacted
-        let configSmall = try DiagnosticDiskSinkConfiguration(
-            maxBytesPerStream: 500,
-            headBudget: 100,
-            tailBudget: 200,
-            maxChunkBytes: 100,
-            tailTrimThreshold: 300,
-            maxSidecarBytes: 16384
-        )
-        let truncateFailAdapter = MockFaultInjectingFileAdapter()
-        let sinkTruncate = try DiagnosticDiskSink(
-            directoryURL: fixtureDir.appendingPathComponent("truncate-fail"),
-            configuration: configSmall,
-            fileAdapter: truncateFailAdapter
-        )
-        defer { _ = sinkTruncate.abort() }
-
-        try sinkTruncate.write(stream: .stdout, data: Data(repeating: 0x41, count: 100))
-        try sinkTruncate.write(stream: .stdout, data: Data(repeating: 0x42, count: 100))
-        try sinkTruncate.write(stream: .stdout, data: Data(repeating: 0x43, count: 100))
-        try sinkTruncate.write(stream: .stdout, data: Data(repeating: 0x44, count: 100))
-        try sinkTruncate.write(stream: .stdout, data: Data(repeating: 0x45, count: 100))
-
-        // Enable truncate fault before triggering compaction (500 + 100 > 500)
-        truncateFailAdapter.failOnTruncate = true
-        truncateFailAdapter.truncateErrno = EIO
-
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            try sinkTruncate.write(stream: .stdout, data: Data(repeating: 0x46, count: 100))
-        }
-        let receiptTruncate = sinkTruncate.finish()
-        #expect(receiptTruncate.stdoutRecord.status == .partiallyCompacted)
-        if case let .failed(op, errno, _) = receiptTruncate.stdoutRecord.compactionOutcome {
-            #expect(op == .truncate)
-            #expect(errno == EIO)
-        } else {
-            Issue.record("Expected compactionOutcome to be failed with truncate")
-        }
-
-        // Case 4: No-overwrite publication fails when destination persistence.json already exists
-        let publishCollisionDir = fixtureDir.appendingPathComponent("publish-collision")
-        let sinkPublishCollision = try DiagnosticDiskSink(directoryURL: publishCollisionDir)
-        defer { _ = sinkPublishCollision.abort() }
-
-        try sinkPublishCollision.write(stream: .stdout, data: Data("valid".utf8))
-
-        // Someone creates persistence.json concurrently before finish
-        let collidingTarget = publishCollisionDir.appendingPathComponent("persistence.json")
-        try Data("pre-existing content".utf8).write(to: collidingTarget)
-
-        let receiptCollision = sinkPublishCollision.finish()
-        #expect(!receiptCollision.sidecarPublished)
-        #expect(receiptCollision.sidecarURL == nil)
-        #expect(receiptCollision.failure != nil)
-        if case let .failed(op, errno, _) = receiptCollision.metadataRecord.publishOutcome {
-            #expect(op == .rename)
-            #expect(errno == EEXIST)
-        } else {
-            Issue.record("Expected publishOutcome to be failed with EEXIST")
-        }
-        // Verify pre-existing file was NOT overwritten
-        let preservedContent = try String(contentsOf: collidingTarget, encoding: .utf8)
-        #expect(preservedContent == "pre-existing content")
-    }
-
-    // MARK: - Test E: Symlink Rejection, Ancestor Symlink Rejection & File Collisions
-
-    @Test("Test E: Symlink rejection, ancestor symlink rejection, file collisions, and empty/oversized chunk policies")
-    func testDirectoryAndChunkRejections() throws {
-        let fixtureDir = try Self.makeOwnedFixtureDirectory(testName: "testE")
-        defer { Self.cleanupFixtureDirectory(fixtureDir) }
-
-        // 1. Direct symlink rejection
-        let symlinkAdapter = MockFaultInjectingFileAdapter()
-        symlinkAdapter.isSymlinkResponse = true
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            _ = try DiagnosticDiskSink(directoryURL: fixtureDir, fileAdapter: symlinkAdapter)
-        }
-
-        // 2. Ancestor symlink rejection
-        let ancestorSymlinkAdapter = MockFaultInjectingFileAdapter()
-        ancestorSymlinkAdapter.ancestorSymlinkResponse = true
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            _ = try DiagnosticDiskSink(directoryURL: fixtureDir, fileAdapter: ancestorSymlinkAdapter)
-        }
-
-        // 3. File collision rejection at setup
-        let collisionDir = fixtureDir.appendingPathComponent("collision")
-        try FileManager.default.createDirectory(at: collisionDir, withIntermediateDirectories: true)
-        // Pre-create stdout.bin
-        try Data("pre-existing".utf8).write(to: collisionDir.appendingPathComponent("stdout.bin"))
-
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            _ = try DiagnosticDiskSink(directoryURL: collisionDir)
-        }
-
-        // 4. Chunk validation
-        let validDir = fixtureDir.appendingPathComponent("valid")
-        let sink = try DiagnosticDiskSink(directoryURL: validDir)
-        defer { _ = sink.abort() }
-
-        // Empty chunk rejection
-        #expect(throws: DiagnosticDiskSinkError.emptyChunk) {
-            try sink.write(stream: .stdout, data: Data())
-        }
-
-        // Oversized chunk rejection (> 64 KiB)
-        let oversizedData = Data(repeating: 0xAA, count: 65_537)
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            try sink.write(stream: .stdout, data: oversizedData)
-        }
-    }
-}
-
 // MARK: - Mock Fault-Injecting File Adapter
 
 private final class MockFaultInjectingFileAdapter: DiskSinkFileAdapter, @unchecked Sendable {
     private let underlying = POSIXDiskSinkFileAdapter()
 
+    // Recorded operations
+    var closeAttempts: [Int32: Int] = [:]
+    var closeAttemptsByResource: [String: Int] = [:]
+    var openedDescriptors: Set<Int32> = []
+    var fdFileNames: [Int32: String] = [:]
+
+    // Injected faults
     var failOnOpenFileName: String? = nil
     var openErrno: Int32 = EACCES
 
+    var writeInvocationCount: Int = 0
+    var failOnWriteInvocation: Int? = nil
+    var failOnWriteCommittedBytes: Int? = nil
+    var failOnWriteAmbiguous: Bool = false
     var shortWriteLimit: Int? = nil
+
+    var failOnSeek: Bool = false
+    var seekErrno: Int32 = EIO
 
     var failOnTruncate: Bool = false
     var truncateErrno: Int32 = EIO
 
-    var isSymlinkResponse: Bool = false
-    var ancestorSymlinkResponse: Bool = false
+    var failOnSync: Bool = false
+    var syncErrno: Int32 = EIO
 
-    func openDirectory(path: String) throws -> Int32 {
-        try underlying.openDirectory(path: path)
+    var failOnCloseFileName: String? = nil
+    var closeErrno: Int32 = EIO
+
+    var failOnPublish: Bool = false
+    var publishErrno: Int32 = EEXIST
+
+    var failOnDirectorySync: Bool = false
+    var directorySyncErrno: Int32 = EIO
+
+    var failOnUnlinkAt: Bool = false
+    var unlinkErrno: Int32 = EIO
+
+    var failOnCreateDirectory: Bool = false
+    var createDirectoryErrno: Int32 = EEXIST
+
+    var failOnOpenDirectory: Bool = false
+    var openDirectoryErrno: Int32 = EACCES
+
+    var failOnRemoveDirectory: Bool = false
+    var removeDirectoryErrno: Int32 = EIO
+
+    func openRootDirectory() throws -> Int32 {
+        try underlying.openRootDirectory()
     }
 
-    func createDirectory(path: String, mode: mode_t) throws {
-        try underlying.createDirectory(path: path, mode: mode)
+    func openDirectoryAt(parentFd: Int32, component: String) throws -> Int32 {
+        if failOnOpenDirectory {
+            throw DiagnosticDiskSinkError.ioError(operation: .directoryOpen, errno: openDirectoryErrno, message: "Mock open directory error")
+        }
+        let fd = try underlying.openDirectoryAt(parentFd: parentFd, component: component)
+        openedDescriptors.insert(fd)
+        return fd
+    }
+
+    func createDirectoryAt(parentFd: Int32, component: String, mode: mode_t) throws {
+        if failOnCreateDirectory {
+            if createDirectoryErrno == EEXIST {
+                throw DiagnosticDiskSinkError.fileCollision("Session directory child '\(component)' already exists")
+            }
+            throw DiagnosticDiskSinkError.ioError(operation: .directoryCreate, errno: createDirectoryErrno, message: "Mock create directory error")
+        }
+        try underlying.createDirectoryAt(parentFd: parentFd, component: component, mode: mode)
+    }
+
+    func removeDirectoryAt(parentFd: Int32, component: String) throws {
+        if failOnRemoveDirectory {
+            throw DiagnosticDiskSinkError.ioError(operation: .cleanup, errno: removeDirectoryErrno, message: "Mock remove directory error")
+        }
+        try underlying.removeDirectoryAt(parentFd: parentFd, component: component)
     }
 
     func openAt(dirFd: Int32, fileName: String, flags: Int32, mode: mode_t) throws -> Int32 {
         if let failName = failOnOpenFileName, fileName.contains(failName) {
-            throw DiagnosticDiskSinkError.ioError(operation: .open, errno: openErrno, message: "Mock open error")
+            if openErrno == EEXIST {
+                throw DiagnosticDiskSinkError.fileCollision("File '\(fileName)' already exists")
+            }
+            throw DiagnosticDiskSinkError.ioError(operation: .open, errno: openErrno, message: "Mock open error for \(fileName)")
         }
-        return try underlying.openAt(dirFd: dirFd, fileName: fileName, flags: flags, mode: mode)
+        let fd = try underlying.openAt(dirFd: dirFd, fileName: fileName, flags: flags, mode: mode)
+        fdFileNames[fd] = fileName
+        openedDescriptors.insert(fd)
+        return fd
     }
 
     func write(fd: Int32, data: Data) throws -> Int {
+        writeInvocationCount += 1
+        if let targetInvocation = failOnWriteInvocation, writeInvocationCount == targetInvocation {
+            if failOnWriteAmbiguous {
+                throw DiagnosticDiskSinkError.ioError(
+                    operation: .write,
+                    errno: EIO,
+                    message: "Simulated ambiguous write error",
+                    bytesCommitted: nil
+                )
+            }
+            if let committed = failOnWriteCommittedBytes {
+                let piece = data.prefix(committed)
+                _ = try underlying.write(fd: fd, data: piece)
+                throw DiagnosticDiskSinkError.ioError(
+                    operation: .write,
+                    errno: EIO,
+                    message: "Simulated partial write error",
+                    bytesCommitted: committed
+                )
+            }
+        }
         if let limit = shortWriteLimit {
-            shortWriteLimit = nil // Trigger once
+            shortWriteLimit = nil
             let piece = data.prefix(limit)
             return try underlying.write(fd: fd, data: piece)
         }
@@ -462,7 +137,10 @@ private final class MockFaultInjectingFileAdapter: DiskSinkFileAdapter, @uncheck
     }
 
     func seek(fd: Int32, offset: off_t, whence: Int32) throws -> off_t {
-        try underlying.seek(fd: fd, offset: offset, whence: whence)
+        if failOnSeek {
+            throw DiagnosticDiskSinkError.ioError(operation: .seek, errno: seekErrno, message: "Mock seek error")
+        }
+        return try underlying.seek(fd: fd, offset: offset, whence: whence)
     }
 
     func truncate(fd: Int32, length: off_t) throws {
@@ -473,44 +151,539 @@ private final class MockFaultInjectingFileAdapter: DiskSinkFileAdapter, @uncheck
     }
 
     func sync(fd: Int32) throws {
+        if failOnSync {
+            throw DiagnosticDiskSinkError.ioError(operation: .sync, errno: syncErrno, message: "Mock sync error")
+        }
         try underlying.sync(fd: fd)
     }
 
     func close(fd: Int32) throws {
+        closeAttempts[fd, default: 0] += 1
+        if let name = fdFileNames[fd] {
+            closeAttemptsByResource[name, default: 0] += 1
+        }
+        if let failTarget = failOnCloseFileName, let name = fdFileNames[fd], name.contains(failTarget) {
+            _ = try? underlying.close(fd: fd)
+            throw DiagnosticDiskSinkError.ioError(operation: .close, errno: closeErrno, message: "Mock close error on fd \(fd) for \(name)")
+        }
         try underlying.close(fd: fd)
     }
 
     func publishSidecar(dirFd: Int32, tmpName: String, targetName: String) throws {
+        if failOnPublish {
+            if publishErrno == EEXIST {
+                throw DiagnosticDiskSinkError.fileCollision("Destination '\(targetName)' already exists")
+            }
+            throw DiagnosticDiskSinkError.ioError(operation: .rename, errno: publishErrno, message: "Mock rename error")
+        }
         try underlying.publishSidecar(dirFd: dirFd, tmpName: tmpName, targetName: targetName)
     }
 
     func syncDirectory(dirFd: Int32) throws {
+        if failOnDirectorySync {
+            throw DiagnosticDiskSinkError.ioError(operation: .directorySync, errno: directorySyncErrno, message: "Mock directory sync error")
+        }
         try underlying.syncDirectory(dirFd: dirFd)
     }
 
     func unlinkAt(dirFd: Int32, fileName: String) throws {
+        if failOnUnlinkAt {
+            throw DiagnosticDiskSinkError.ioError(operation: .cleanup, errno: unlinkErrno, message: "Mock unlink error")
+        }
         try underlying.unlinkAt(dirFd: dirFd, fileName: fileName)
-    }
-
-    func removeDirectory(path: String) throws {
-        try underlying.removeDirectory(path: path)
     }
 
     func fileExistsAt(dirFd: Int32, fileName: String) -> Bool {
         underlying.fileExistsAt(dirFd: dirFd, fileName: fileName)
     }
+}
 
-    func isDirectory(path: String) -> Bool {
-        underlying.isDirectory(path: path)
+// MARK: - Test Suite
+
+@Suite("Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt")
+struct DiagnosticDiskSinkTests {
+
+    // MARK: - Worktree-Owned Fixture Root Helper
+
+    private static func makeOwnedFixtureRoot(testName: String) throws -> URL {
+        let thisFile = URL(fileURLWithPath: #filePath)
+        let worktreeRoot = thisFile
+            .deletingLastPathComponent() // WhiskyKitTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // WhiskyKit
+            .deletingLastPathComponent() // worktree
+        let fixtureRoot = worktreeRoot.appendingPathComponent(".scratch/test-fixtures", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+        let testRoot = fixtureRoot.appendingPathComponent("\(testName)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: testRoot, withIntermediateDirectories: true)
+        return testRoot
     }
 
-    func isSymbolicLink(path: String) -> Bool {
-        if isSymlinkResponse { return true }
-        return underlying.isSymbolicLink(path: path)
+    private static func cleanupFixtureDirectory(_ url: URL) {
+        _ = try? FileManager.default.removeItem(at: url)
     }
 
-    func checkSymlinkAncestors(path: String) -> Bool {
-        if ancestorSymlinkResponse { return true }
-        return underlying.checkSymlinkAncestors(path: path)
+    // MARK: - Test A: Real Owned Files Under Cap
+
+    @Test("Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal")
+    func testRealOwnedFilesUnderCap() throws {
+        let fixtureRoot = try Self.makeOwnedFixtureRoot(testName: "testA")
+        defer { Self.cleanupFixtureDirectory(fixtureRoot) }
+
+        let sink = try DiagnosticDiskSink(rootDirectoryURL: fixtureRoot, sessionName: "session")
+        defer { _ = sink.abort() }
+
+        // Raw chunks with NUL bytes, high ASCII, and arbitrary byte sequences
+        let stdoutChunk1 = Data([0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD])
+        let stdoutChunk2 = Data("Standard output message with unicode: 🚀\n".utf8)
+        let stderrChunk1 = Data([0xDE, 0xAD, 0xBE, 0xEF, 0x00])
+        let stderrChunk2 = Data("Standard error diagnostics stream\n".utf8)
+
+        try sink.write(stream: .stdout, data: stdoutChunk1)
+        try sink.write(stream: .stdout, data: stdoutChunk2)
+        try sink.write(stream: .stderr, data: stderrChunk1)
+        try sink.write(stream: .stderr, data: stderrChunk2)
+
+        let expectedStdoutBytes = stdoutChunk1 + stdoutChunk2
+        let expectedStderrBytes = stderrChunk1 + stderrChunk2
+
+        // Seal the sink
+        let receipt1 = sink.finish()
+        #expect(receipt1.isSealed)
+        #expect(receipt1.sidecarPublished)
+        #expect(receipt1.parentDirectorySynced)
+        #expect(receipt1.failure == nil)
+        #expect(receipt1.sidecarURL != nil)
+
+        // Idempotent finish call returns same receipt
+        let receipt2 = sink.finish()
+        #expect(receipt1 == receipt2)
+
+        // Verify accounting on both streams
+        #expect(receipt1.stdoutRecord.totalAdmittedBytes == UInt64(expectedStdoutBytes.count))
+        #expect(receipt1.stdoutRecord.committedBytes == UInt64(expectedStdoutBytes.count))
+        #expect(receipt1.stdoutRecord.landedUniqueBytes == UInt64(expectedStdoutBytes.count))
+        #expect(receipt1.stdoutRecord.retainedBytesOnDisk == UInt64(expectedStdoutBytes.count))
+        #expect(receipt1.stdoutRecord.discardedBytes == 0)
+        #expect(receipt1.stdoutRecord.neverWrittenDiscardedBytes == 0)
+        #expect(receipt1.stdoutRecord.retentionTrimmedBytes == 0)
+        #expect(receipt1.stdoutRecord.isCompacted == false)
+        #expect(receipt1.stdoutRecord.diskPayloadKnown == true)
+        #expect(receipt1.stdoutRecord.status == StreamPersistenceStatus.sealed)
+
+        #expect(receipt1.stderrRecord.totalAdmittedBytes == UInt64(expectedStderrBytes.count))
+        #expect(receipt1.stderrRecord.committedBytes == UInt64(expectedStderrBytes.count))
+        #expect(receipt1.stderrRecord.landedUniqueBytes == UInt64(expectedStderrBytes.count))
+        #expect(receipt1.stderrRecord.retainedBytesOnDisk == UInt64(expectedStderrBytes.count))
+        #expect(receipt1.stderrRecord.discardedBytes == 0)
+
+        // Verify real on-disk files match exact raw bytes byte-for-byte
+        let stdoutOnDisk = try Data(contentsOf: receipt1.directoryURL.appendingPathComponent("stdout.bin"))
+        let stderrOnDisk = try Data(contentsOf: receipt1.directoryURL.appendingPathComponent("stderr.bin"))
+        #expect(stdoutOnDisk == expectedStdoutBytes)
+        #expect(stderrOnDisk == expectedStderrBytes)
+
+        // Verify sidecar contents
+        guard let sidecarURL = receipt1.sidecarURL else {
+            Issue.record("Missing sidecar URL in receipt")
+            return
+        }
+        let sidecarData = try Data(contentsOf: sidecarURL)
+        let decoder = JSONDecoder()
+        let sidecar = try decoder.decode(DiagnosticPersistenceSidecar.self, from: sidecarData)
+        #expect(sidecar.sinkSessionId == receipt1.sessionId)
+        #expect(sidecar.formatVersion == DiagnosticPersistenceSidecar.currentFormatVersion)
+        #expect(sidecar.stdoutRecord.retainedBytesOnDisk == UInt64(expectedStdoutBytes.count))
+        #expect(sidecar.stderrRecord.retainedBytesOnDisk == UInt64(expectedStderrBytes.count))
+        #expect(sidecar.stdoutRecord.committedBytes == UInt64(expectedStdoutBytes.count))
+        #expect(sidecar.stderrRecord.committedBytes == UInt64(expectedStderrBytes.count))
+        #expect(sidecar.isSealed)
+        #expect(sidecar.finalOutcome == "success")
+    }
+
+    // MARK: - Test B: Reproducing Case 1 - Honest Accounting Across Compaction, Append & Second Compaction
+
+    @Test("Test B: Case 1 - First 600 / cap 500 / head 100 / tail 200 exact 300 retained bytes and honest never-written middle accounting")
+    func testReproducingCase1_ExactRetainedAndNeverWrittenMiddleCompaction() throws {
+        let fixtureRoot = try Self.makeOwnedFixtureRoot(testName: "testB")
+        defer { Self.cleanupFixtureDirectory(fixtureRoot) }
+
+        // Bounded configuration: maxBytesPerStream = 500, headBudget = 100, tailBudget = 200
+        let config = try DiagnosticDiskSinkConfiguration(
+            maxBytesPerStream: 500,
+            headBudget: 100,
+            tailBudget: 200,
+            maxChunkBytes: 65536,
+            tailTrimThreshold: 200
+        )
+
+        let sink = try DiagnosticDiskSink(
+            rootDirectoryURL: fixtureRoot,
+            sessionName: "session",
+            configuration: config
+        )
+        defer { _ = sink.abort() }
+
+        // Step 1: First chunk of 600 unique bytes (> cap 500)
+        let first600 = Data((0..<600).map { UInt8($0 % 256) })
+        try sink.write(stream: .stdout, data: first600)
+
+        let fileURL = sink.directoryURL.appendingPathComponent("stdout.bin")
+
+        // Invariant checks after first chunk:
+        // - Admitted: 600
+        // - Head: 100 bytes (first 100 of chunk)
+        // - Tail: 200 bytes (last 200 of chunk, bytes 400..<600)
+        // - Never-written middle bytes (bytes 100..<400): 300 bytes!
+        // - Landed unique bytes: exactly 300 (100 head + 200 suffix)!
+        // - Committed bytes: exactly 300 (NOT 600!)
+        // - Retained on disk: exactly 300 bytes!
+        let diskDataStep1 = try Data(contentsOf: fileURL)
+        #expect(diskDataStep1.count == 300)
+        #expect(diskDataStep1.prefix(100) == first600.prefix(100))
+        #expect(diskDataStep1.suffix(200) == first600.suffix(200))
+
+        // Step 2: Subsequent append of 50 bytes (300 + 50 = 350 <= 500, under-cap append)
+        let append50 = Data((0..<50).map { UInt8(($0 + 100) % 256) })
+        try sink.write(stream: .stdout, data: append50)
+
+        // On-disk file must now be exactly 350 bytes!
+        let diskDataStep2 = try Data(contentsOf: fileURL)
+        #expect(diskDataStep2.count == 350)
+        #expect(diskDataStep2.prefix(100) == first600.prefix(100))
+        #expect(diskDataStep2.suffix(50) == append50)
+
+        // Step 3: Second compaction with 200 bytes (350 + 200 = 550 > 500, triggers second compaction)
+        let append200 = Data((0..<200).map { UInt8(($0 + 200) % 256) })
+        try sink.write(stream: .stdout, data: append200)
+
+        // On-disk file must now be compacted back to 300 bytes:
+        // 100 bytes startup head + 200 bytes recent suffix (which is the last 200 bytes of tail buffer)
+        let diskDataStep3 = try Data(contentsOf: fileURL)
+        #expect(diskDataStep3.count == 300)
+        #expect(diskDataStep3.prefix(100) == first600.prefix(100)) // Startup head is preserved verbatim!
+        #expect(diskDataStep3.suffix(200) == append200)           // Recent tail is preserved!
+
+        let receipt = sink.finish()
+        #expect(receipt.stdoutRecord.totalAdmittedBytes == 850) // 600 + 50 + 200
+        #expect(receipt.stdoutRecord.retainedBytesOnDisk == 300)
+        #expect(receipt.stdoutRecord.retainedHeadBytes == 100)
+        #expect(receipt.stdoutRecord.retainedTailBytes == 200)
+        #expect(receipt.stdoutRecord.neverWrittenDiscardedBytes == 300) // From first 600 chunk
+        #expect(receipt.stdoutRecord.retentionTrimmedBytes == 250)      // Trimmed during second compaction
+        #expect(receipt.stdoutRecord.discardedBytes == 550)            // 300 + 250
+        #expect(receipt.stdoutRecord.landedUniqueBytes == 550)         // 850 - 300
+        #expect(receipt.stdoutRecord.committedBytes == 550)            // Matches landedUniqueBytes
+        #expect(receipt.stdoutRecord.isCompacted == true)
+        #expect(receipt.stdoutRecord.diskPayloadKnown == true)
+        #expect(receipt.stdoutRecord.physicalRewriteBytes >= 500)
+    }
+
+    // MARK: - Test C: Configuration Validation
+
+    @Test("Test C: Configuration validation rejects negative, zero, overflow, and huge allocations")
+    func testConfigurationValidation() {
+        // Negative / zero maxBytesPerStream
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(maxBytesPerStream: 0)
+        }
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(maxBytesPerStream: -10)
+        }
+
+        // Head budget <= 0 or > 50 MiB
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(headBudget: 0)
+        }
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(headBudget: 51 * 1024 * 1024)
+        }
+
+        // Tail budget <= 0 or > 50 MiB
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(tailBudget: 0)
+        }
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(tailBudget: 51 * 1024 * 1024)
+        }
+
+        // Max chunk bytes <= 0 or > 64 KiB
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(maxChunkBytes: 0)
+        }
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(maxChunkBytes: 65_537)
+        }
+
+        // Max sidecar bytes <= 0 or > 1 MiB
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(maxSidecarBytes: 0)
+        }
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(maxSidecarBytes: 2 * 1024 * 1024)
+        }
+
+        // maxBytesPerStream insufficient for headBudget + tailBudget
+        #expect(throws: DiagnosticDiskSinkConfigurationError.self) {
+            _ = try DiagnosticDiskSinkConfiguration(
+                maxBytesPerStream: 1000,
+                headBudget: 600,
+                tailBudget: 500
+            )
+        }
+    }
+
+    // MARK: - Test D: Reproducing Cases 2-5 - Fault Injection, Partial Progress & Ownership State Machine
+
+    @Test("Test D: Reproducing Cases 2 to 5 - Suffix 37-byte progress, ambiguous failure, single close attempt, preserved temp file, and targeted faults")
+    func testReproducingCases2to5_DeterministicFaultsAndOwnershipStateMachine() throws {
+        let fixtureRoot = try Self.makeOwnedFixtureRoot(testName: "testD")
+        defer { Self.cleanupFixtureDirectory(fixtureRoot) }
+
+        let configSmall = try DiagnosticDiskSinkConfiguration(
+            maxBytesPerStream: 500,
+            headBudget: 100,
+            tailBudget: 200,
+            maxChunkBytes: 65536,
+            tailTrimThreshold: 200
+        )
+
+        // Case 2a: Suffix partial write 37 bytes then error -> matches actual 137-byte file on disk
+        let partialSuffixAdapter = MockFaultInjectingFileAdapter()
+        partialSuffixAdapter.failOnWriteInvocation = 2 // Invocation 1 is headBuffer (100), invocation 2 is suffix (37)
+        partialSuffixAdapter.failOnWriteCommittedBytes = 37
+
+        let sinkPartialSuffix = try DiagnosticDiskSink(
+            rootDirectoryURL: fixtureRoot,
+            sessionName: "suffix-37-fail",
+            configuration: configSmall,
+            fileAdapter: partialSuffixAdapter
+        )
+
+        let chunk600 = Data((0..<600).map { UInt8($0 % 256) })
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            try sinkPartialSuffix.write(stream: .stdout, data: chunk600)
+        }
+
+        let receiptPartialSuffix = sinkPartialSuffix.abort()
+        #expect(receiptPartialSuffix.stdoutRecord.retainedBytesOnDisk == 137)
+        #expect(receiptPartialSuffix.stdoutRecord.retainedHeadBytes == 100)
+        #expect(receiptPartialSuffix.stdoutRecord.retainedTailBytes == 37)
+        #expect(receiptPartialSuffix.stdoutRecord.diskPayloadKnown == true)
+        #expect(receiptPartialSuffix.stdoutRecord.status == StreamPersistenceStatus.partiallyCompacted)
+
+        let file37 = try Data(contentsOf: sinkPartialSuffix.directoryURL.appendingPathComponent("stdout.bin"))
+        #expect(file37.count == 137)
+        #expect(file37.prefix(100) == chunk600.prefix(100))
+        #expect(file37.suffix(37) == chunk600.suffix(200).prefix(37))
+
+        // Case 2b: Ambiguous suffix progress -> diskPayloadKnown == false
+        let ambiguousAdapter = MockFaultInjectingFileAdapter()
+        ambiguousAdapter.failOnWriteInvocation = 2
+        ambiguousAdapter.failOnWriteAmbiguous = true
+
+        let sinkAmbiguous = try DiagnosticDiskSink(
+            rootDirectoryURL: fixtureRoot,
+            sessionName: "ambiguous-fail",
+            configuration: configSmall,
+            fileAdapter: ambiguousAdapter
+        )
+
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            try sinkAmbiguous.write(stream: .stdout, data: chunk600)
+        }
+        let receiptAmbiguous = sinkAmbiguous.abort()
+        #expect(receiptAmbiguous.stdoutRecord.diskPayloadKnown == false)
+
+        // Case 2c: Under-cap partial write progress
+        let shortAdapter = MockFaultInjectingFileAdapter()
+        shortAdapter.shortWriteLimit = 30
+
+        let sinkShort = try DiagnosticDiskSink(
+            rootDirectoryURL: fixtureRoot,
+            sessionName: "short-undercap",
+            configuration: configSmall,
+            fileAdapter: shortAdapter
+        )
+
+        let sample50 = Data(repeating: 0x42, count: 50)
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            try sinkShort.write(stream: .stdout, data: sample50)
+        }
+        let receiptShort = sinkShort.abort()
+        #expect(receiptShort.stdoutRecord.retainedBytesOnDisk == 30)
+        #expect(receiptShort.stdoutRecord.landedUniqueBytes == 30)
+        #expect(receiptShort.stdoutRecord.diskPayloadKnown == true)
+        let fileShort = try Data(contentsOf: sinkShort.directoryURL.appendingPathComponent("stdout.bin"))
+        #expect(fileShort.count == 30)
+
+        // Case 3: Simulate close consumed fd error -> exactly ONE close attempt per descriptor
+        let closeFailAdapter = MockFaultInjectingFileAdapter()
+        closeFailAdapter.failOnCloseFileName = ".persistence.json.tmp"
+
+        let sinkCloseFail = try DiagnosticDiskSink(
+            rootDirectoryURL: fixtureRoot,
+            sessionName: "close-fail",
+            configuration: configSmall,
+            fileAdapter: closeFailAdapter
+        )
+        try sinkCloseFail.write(stream: .stdout, data: Data("Testing close fail\n".utf8))
+
+        let receiptClose = sinkCloseFail.finish()
+        #expect(receiptClose.metadataRecord.closeOutcome != StageOutcome.succeeded)
+
+        // Assert the failing descriptor had exactly ONE close attempt
+        var foundTmp = false
+        for (name, count) in closeFailAdapter.closeAttemptsByResource {
+            if name.contains(".persistence.json.tmp") {
+                foundTmp = true
+                #expect(count == 1, "Expected exactly 1 close attempt for \(name), got \(count)")
+            }
+        }
+        #expect(foundTmp, "Expected tmp sidecar descriptor to be registered and closed")
+
+        // Case 4: Precreate .persistence.json.tmp.<chosen-sessionId> AFTER setup
+        // finish must reject safely, preserve its bytes, report create failure and not claim an unlink of it.
+        let precreateSessionId = UUID()
+        let sinkPrecreate = try DiagnosticDiskSink(
+            rootDirectoryURL: fixtureRoot,
+            sessionName: "precreate-tmp-test",
+            sessionId: precreateSessionId,
+            configuration: configSmall
+        )
+
+        let foreignTmpName = ".persistence.json.tmp.\(precreateSessionId.uuidString)"
+        let foreignTmpURL = sinkPrecreate.directoryURL.appendingPathComponent(foreignTmpName)
+        let foreignPayload = Data("FOREIGN_TEMP_PAYLOAD_MUST_BE_PRESERVED".utf8)
+        try foreignPayload.write(to: foreignTmpURL)
+
+        let receiptPrecreate = sinkPrecreate.finish()
+        #expect(receiptPrecreate.sidecarPublished == false)
+        if case let .failed(op, errno, _) = receiptPrecreate.metadataRecord.createOutcome {
+            #expect(op == .open)
+            #expect(errno == EEXIST)
+        } else {
+            Issue.record("Expected createOutcome to be failed with EEXIST, got \(receiptPrecreate.metadataRecord.createOutcome)")
+        }
+
+        // Verify pre-created file was preserved intact and NOT unlinked
+        #expect(FileManager.default.fileExists(atPath: foreignTmpURL.path))
+        let remainingForeignBytes = try Data(contentsOf: foreignTmpURL)
+        #expect(remainingForeignBytes == foreignPayload)
+
+        // Case 5: Fixed targeted fault rows
+        // 5a. Payload truncate fault
+        let truncateFailAdapter = MockFaultInjectingFileAdapter()
+        truncateFailAdapter.failOnTruncate = true
+        let sinkTruncate = try DiagnosticDiskSink(
+            rootDirectoryURL: fixtureRoot,
+            sessionName: "truncate-fault",
+            configuration: configSmall,
+            fileAdapter: truncateFailAdapter
+        )
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            try sinkTruncate.write(stream: .stdout, data: chunk600)
+        }
+        let receiptTruncate = sinkTruncate.abort()
+        if case let .failed(op, errno, _) = receiptTruncate.stdoutRecord.compactionOutcome {
+            #expect(op == .truncate)
+            #expect(errno == EIO)
+        } else {
+            Issue.record("Expected truncate compactionOutcome failure")
+        }
+
+        // 5b. Publish collision: destination persistence.json already exists
+        let publishCollisionSink = try DiagnosticDiskSink(
+            rootDirectoryURL: fixtureRoot,
+            sessionName: "publish-collision"
+        )
+        let targetSidecarURL = publishCollisionSink.directoryURL.appendingPathComponent("persistence.json")
+        let foreignSidecarBytes = Data("FOREIGN_PERSISTENCE_SIDECAR".utf8)
+        try foreignSidecarBytes.write(to: targetSidecarURL)
+
+        let receiptPublish = publishCollisionSink.finish()
+        #expect(!receiptPublish.sidecarPublished)
+        if case let .failed(op, errno, _) = receiptPublish.metadataRecord.publishOutcome {
+            #expect(op == .rename)
+            #expect(errno == EEXIST)
+        } else {
+            Issue.record("Expected publishOutcome to fail with EEXIST")
+        }
+        // Verify destination file is preserved intact
+        let preservedSidecar = try Data(contentsOf: targetSidecarURL)
+        #expect(preservedSidecar == foreignSidecarBytes)
+
+        // 5c. Setup cleanup error reporting
+        let setupCleanupFailAdapter = MockFaultInjectingFileAdapter()
+        setupCleanupFailAdapter.failOnOpenFileName = "stderr.bin"
+        setupCleanupFailAdapter.failOnUnlinkAt = true
+
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            _ = try DiagnosticDiskSink(
+                rootDirectoryURL: fixtureRoot,
+                sessionName: "setup-cleanup-fail",
+                fileAdapter: setupCleanupFailAdapter
+            )
+        }
+    }
+
+    // MARK: - Test E: Reproducing Case 6 - Symlink Rejection & Existing Session Directory Rejection
+
+    @Test("Test E: Case 6 - Real owned-fixture ancestor symlinks, final symlinks, existing-session rejection, and chunk policies")
+    func testReproducingCase6_RealFixtureSymlinksAndExistingSessionRejection() throws {
+        let fixtureRoot = try Self.makeOwnedFixtureRoot(testName: "testE")
+        defer { Self.cleanupFixtureDirectory(fixtureRoot) }
+
+        // 1. Real ancestor symlink rejection
+        let realAncestorDir = fixtureRoot.appendingPathComponent("real-ancestor", isDirectory: true)
+        try FileManager.default.createDirectory(at: realAncestorDir, withIntermediateDirectories: true)
+        let symlinkAncestorDir = fixtureRoot.appendingPathComponent("symlink-ancestor")
+        try FileManager.default.createSymbolicLink(at: symlinkAncestorDir, withDestinationURL: realAncestorDir)
+
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            _ = try DiagnosticDiskSink(rootDirectoryURL: symlinkAncestorDir, sessionName: "child")
+        }
+
+        // 2. Real final session symlink rejection
+        let realTargetDir = fixtureRoot.appendingPathComponent("real-target", isDirectory: true)
+        try FileManager.default.createDirectory(at: realTargetDir, withIntermediateDirectories: true)
+        let symlinkChild = fixtureRoot.appendingPathComponent("symlink-child")
+        try FileManager.default.createSymbolicLink(at: symlinkChild, withDestinationURL: realTargetDir)
+
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            _ = try DiagnosticDiskSink(directoryURL: symlinkChild)
+        }
+
+        // 3. Existing session directory collision rejection:
+        // Must reject fresh creation with fileCollision without adopting, chmodding, or deleting existing directory.
+        let existingSessionDir = fixtureRoot.appendingPathComponent("existing-session", isDirectory: true)
+        try FileManager.default.createDirectory(at: existingSessionDir, withIntermediateDirectories: true)
+        let canaryFile = existingSessionDir.appendingPathComponent("canary.txt")
+        try Data("CANARY_PAYLOAD".utf8).write(to: canaryFile)
+
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            _ = try DiagnosticDiskSink(directoryURL: existingSessionDir)
+        }
+
+        // Verify existing session directory and canary file are completely untouched!
+        #expect(FileManager.default.fileExists(atPath: existingSessionDir.path))
+        #expect(FileManager.default.fileExists(atPath: canaryFile.path))
+        let canaryContent = try String(contentsOf: canaryFile, encoding: .utf8)
+        #expect(canaryContent == "CANARY_PAYLOAD")
+
+        // 4. Chunk validation policies
+        let validSink = try DiagnosticDiskSink(rootDirectoryURL: fixtureRoot, sessionName: "chunk-policies")
+        defer { _ = validSink.abort() }
+
+        // Empty chunk rejection
+        #expect(throws: DiagnosticDiskSinkError.emptyChunk) {
+            try validSink.write(stream: .stdout, data: Data())
+        }
+
+        // Oversized chunk rejection (> 64 KiB)
+        let oversizedData = Data(repeating: 0xAA, count: 65_537)
+        #expect(throws: DiagnosticDiskSinkError.self) {
+            try validSink.write(stream: .stdout, data: oversizedData)
+        }
     }
 }

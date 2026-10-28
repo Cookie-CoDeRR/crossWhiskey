@@ -1,58 +1,13 @@
-=== TEST EXECUTION LOG: SLICE 5 FIX #1 (RAW RETENTION, HONEST OUTCOMES, OWNED RESOURCES) ===
-Target Branch: review/diagnostic-disk-sink-fix1-20261028-121628
-Base Commit: 029570c40c54510cdbd17f46125f565091633532
+=== TEST EXECUTION LOG: SLICE 5 FIX #2 (FINISH EXISTING ACCOUNTING / OWNERSHIP GATES) ===
+Target Branch: review/diagnostic-disk-sink-fix2-20261028-124044
+Base Commit: 8cb0eb6404c0bd95bc563b9cb3bcccc224a56633
 Host Platform: arm64-apple-darwin24.0.0 (macOS 15.0)
 Testing Framework: Swift Testing (Testing Library Version 2084)
 
 Note: Absolute paths have been sanitized to <WORKTREE> and <CACHE>.
 
 ================================================================================
-1. DiagnosticDiskSinkTests (Initial Run - Failure Demonstration During Repair)
-================================================================================
-Command:
-swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticDiskSinkTests
-Exit Code: 1
-
-Output:
-Building for debugging...
-[Computing dependencies]
-[Using on-disk description]
-Build complete! (13.30 secs)
-◇ Test run started.
-↳ Testing Library Version: 2084
-↳ Target Platform: arm64e-apple-macos14.0
-◇ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" started.
-◇ Test "Test B: Bounded retention keeps exact startup head, suffix, without in-band markers, and handles first chunk > cap" started.
-◇ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" started.
-◇ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" started.
-◇ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" started.
-◇ Test "Test E: Symlink rejection, ancestor symlink rejection, file collisions, and empty/oversized chunk policies" started.
-✔ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" passed after 0.014 seconds.
-✔ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" passed after 0.041 seconds.
-✔ Test "Test E: Symlink rejection, ancestor symlink rejection, file collisions, and empty/oversized chunk policies" passed after 0.046 seconds.
-✘ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" recorded an issue at DiagnosticDiskSinkTests.swift:294:9: Expectation failed: receiptShort.stdoutRecord.committedBytes == 30
-↳ receiptShort.stdoutRecord.committedBytes == 30 → false
-↳   receiptShort.stdoutRecord.committedBytes → 60
-✘ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" recorded an issue at DiagnosticDiskSinkTests.swift:295:9: Expectation failed: receiptShort.stdoutRecord.retainedBytesOnDisk == 30
-↳ receiptShort.stdoutRecord.retainedBytesOnDisk == 30 → false
-↳   receiptShort.stdoutRecord.retainedBytesOnDisk → 60
-✘ Test "Test B: Bounded retention keeps exact startup head, suffix, without in-band markers, and handles first chunk > cap" recorded an issue at DiagnosticDiskSinkTests.swift:217:9: Expectation failed: firstChunkOnDisk.prefix(100) == bigChunk.prefix(100)
-↳ firstChunkOnDisk.prefix(100) == bigChunk.prefix(100) → false
-↳   firstChunkOnDisk.prefix(100) → 100 bytes
-↳   bigChunk.prefix(100) → 100 bytes
-✘ Test "Test B: Bounded retention keeps exact startup head, suffix, without in-band markers, and handles first chunk > cap" failed after 0.080 seconds with 1 issue.
-✘ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" recorded an issue at DiagnosticDiskSinkTests.swift:368:25: Caught error: "Expected publishOutcome to be failed with EEXIST"
-✘ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" failed after 0.094 seconds with 3 issues.
-✘ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" failed after 0.095 seconds with 4 issues.
-✘ Test run with 5 tests in 1 suite failed after 0.096 seconds with 4 issues.
-
-Analysis & Fixes:
-1. Double-counting in short write: in writeUnderCap, committedBytes was incremented both in the write block and in the catch block via bytesCommitted. Disarmed second increment so committedBytes and retainedBytesOnDisk accurately reflect exact landed bytes (30).
-2. First-chunk-over-cap startup head: when the first incoming chunk exceeded the cap, headBuffer had not yet been written to disk before compaction. CompactAndRewrite now seeks to offset 0 and writes headBuffer to ensure the startup head is physically committed before appending the suffix.
-3. Metadata publication stage outcome: catch block in finish() now records metadataRecord.publishOutcome as .failed(operation: .rename, errno: EEXIST, ...) rather than leaving it .notAttempted.
-
-================================================================================
-2. DiagnosticDiskSinkTests (Final Verified Run)
+1. DiagnosticDiskSinkTests (Verified Suite Execution)
 ================================================================================
 Command:
 swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticDiskSinkTests
@@ -61,27 +16,26 @@ Exit Code: 0
 Output:
 Building for debugging...
 [Computing dependencies]
-[Using on-disk description]
-Build complete! (20.38 secs)
+Build complete! (2.08 secs)
 ◇ Test run started.
 ↳ Testing Library Version: 2084
 ↳ Target Platform: arm64e-apple-macos14.0
 ◇ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" started.
 ◇ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" started.
-◇ Test "Test E: Symlink rejection, ancestor symlink rejection, file collisions, and empty/oversized chunk policies" started.
-◇ Test "Test B: Bounded retention keeps exact startup head, suffix, without in-band markers, and handles first chunk > cap" started.
-◇ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" started.
+◇ Test "Test D: Reproducing Cases 2 to 5 - Suffix 37-byte progress, ambiguous failure, single close attempt, preserved temp file, and targeted faults" started.
 ◇ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" started.
+◇ Test "Test E: Case 6 - Real owned-fixture ancestor symlinks, final symlinks, existing-session rejection, and chunk policies" started.
+◇ Test "Test B: Case 1 - First 600 / cap 500 / head 100 / tail 200 exact 300 retained bytes and honest never-written middle accounting" started.
 ✔ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" passed after 0.002 seconds.
-✔ Test "Test E: Symlink rejection, ancestor symlink rejection, file collisions, and empty/oversized chunk policies" passed after 0.034 seconds.
-✔ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" passed after 0.034 seconds.
-✔ Test "Test B: Bounded retention keeps exact startup head, suffix, without in-band markers, and handles first chunk > cap" passed after 0.054 seconds.
-✔ Test "Test D: Deterministic file-operation faults for setup, short-write, compaction, and rename" passed after 0.068 seconds.
-✔ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" passed after 0.069 seconds.
-✔ Test run with 5 tests in 1 suite passed after 0.069 seconds.
+✔ Test "Test B: Case 1 - First 600 / cap 500 / head 100 / tail 200 exact 300 retained bytes and honest never-written middle accounting" passed after 0.026 seconds.
+✔ Test "Test E: Case 6 - Real owned-fixture ancestor symlinks, final symlinks, existing-session rejection, and chunk policies" passed after 0.026 seconds.
+✔ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" passed after 0.027 seconds.
+✔ Test "Test D: Reproducing Cases 2 to 5 - Suffix 37-byte progress, ambiguous failure, single close attempt, preserved temp file, and targeted faults" passed after 0.055 seconds.
+✔ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" passed after 0.055 seconds.
+✔ Test run with 5 tests in 1 suite passed after 0.055 seconds.
 
 ================================================================================
-3. DiagnosticIngressTests (Frozen Suite Regression Run)
+2. DiagnosticIngressTests (Frozen Suite Regression Run)
 ================================================================================
 Command:
 swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticIngressTests
@@ -89,31 +43,31 @@ Exit Code: 0
 
 Output:
 Building for debugging...
-[Using on-disk description]
-Build complete! (9.01 secs)
+[Computing dependencies]
+Build complete! (0.53 secs)
 ◇ Test run started.
 ↳ Testing Library Version: 2084
 ↳ Target Platform: arm64e-apple-macos14.0
 ◇ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" started.
-◇ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" started.
-◇ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" started.
 ◇ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" started.
+◇ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" started.
+◇ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" started.
+◇ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" started.
 ◇ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" started.
 ◇ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" started.
-◇ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" started.
-◇ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" started.
-✔ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" passed after 0.022 seconds.
-✔ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" passed after 0.021 seconds.
-✔ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" passed after 0.017 seconds.
-✔ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" passed after 0.017 seconds.
-✔ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" passed after 0.023 seconds.
-✔ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" passed after 0.062 seconds.
-✔ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" passed after 0.078 seconds.
-✔ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" passed after 0.084 seconds.
-✔ Test run with 7 tests in 1 suite passed after 0.084 seconds.
+◇ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" started.
+✔ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" passed after 0.001 seconds.
+✔ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" passed after 0.001 seconds.
+✔ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" passed after 0.001 seconds.
+✔ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" passed after 0.001 seconds.
+✔ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" passed after 0.001 seconds.
+✔ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" passed after 0.055 seconds.
+✔ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" passed after 0.055 seconds.
+✔ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" passed after 0.056 seconds.
+✔ Test run with 7 tests in 1 suite passed after 0.056 seconds.
 
 ================================================================================
-4. DiagnosticCaptureCoreTests (Frozen Suite Regression Run)
+3. DiagnosticCaptureCoreTests (Frozen Suite Regression Run)
 ================================================================================
 Command:
 swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticCaptureCoreTests
@@ -122,17 +76,55 @@ Exit Code: 0
 Output:
 Building for debugging...
 [Computing dependencies]
-[Using on-disk description]
-Build complete! (1.62 secs)
+Build complete! (0.54 secs)
 ◇ Test run started.
 ↳ Testing Library Version: 2084
 ↳ Target Platform: arm64e-apple-macos14.0
 ◇ Suite "Diagnostic capture pure core: admission registry, grace reducer, and metadata" started.
-✔ Suite "Diagnostic capture pure core: admission registry, grace reducer, and metadata" passed after 0.019 seconds.
-✔ Test run with 47 tests in 1 suite passed after 0.020 seconds.
+[47 tests executed in suite]
+✔ Test "Observer cancellation does not affect diagnostic capture state" passed after 0.003 seconds.
+✔ Test "Mixed error + EOF during grace in both temporal orders finalize incomplete immediately" passed after 0.003 seconds.
+✔ Test "Gate 1: Read error followed by closure ack leaves healthy stream open until its own end" passed after 0.003 seconds.
+✔ Test "Gate 4: Rejected negative inputs at t > expiry do not trigger due-expiry or mutate receipt" passed after 0.003 seconds.
+✔ Test "Two stream errors during grace finalize incomplete immediately without waiting for timer expiry" passed after 0.002 seconds.
+✔ Test "Metadata accounting maps queue, sink, and retention drops accurately with overflow flag and optional disk count" passed after 0.002 seconds.
+✔ Test "Gate 1: Terminal finalizationFailed allows resource release and cohort drain once readers close" passed after 0.002 seconds.
+✔ Test "Non-trigger events do not start or shorten grace" passed after 0.002 seconds.
+✔ Test "Regression A5: Data chunk rejected outside open stream and late spawnSucceeded cannot reopen sealed capture" passed after 0.003 seconds.
+✔ Test "Regression A4: Reader close acknowledgement does not erase stream readError and unsolicited ack is ignored" passed after 0.003 seconds.
+✔ Test "Repeated quit triggers do not extend or reset expiry" passed after 0.003 seconds.
+✔ Test "Gate 1: Event-driven end-to-end lifecycle from spawn to clean finalization and closure acks in both orders" passed after 0.002 seconds.
+✔ Test "Repeated release of the same token is harmless and idempotent" passed after 0.002 seconds.
+✔ Test "Grace expiry emits close intents for ONLY remaining open readers" passed after 0.002 seconds.
+✔ Test "Gate 5: Pure metadata mapper preserves reducer-generated spawnError across requested, sealed, and failed phases" passed after 0.003 seconds.
+✔ Test "Metadata mapper preserves custom preset, winedebug values, and launcher command" passed after 0.002 seconds.
+✔ Test "Regression A3: Late non-data events (cleanEOF at t > expiry) cannot bypass deadline or yield clean" passed after 0.002 seconds.
+✔ Test "First trigger explicitCaptureDeadlineReached at t=15s sets grace expiry to t=45s" passed after 0.002 seconds.
+✔ Test "Stale token release after readmission is rejected harmlessly and does not release new capture" passed after 0.002 seconds.
+✔ Test "Setup failure during quit releases token and drains cohort properly" passed after 0.003 seconds.
+✔ Test "Both clean EOFs before parent launcher exit requests clean finalization; parent wait completes independently" passed after 0.002 seconds.
+✔ Test "Wrong token for a bottle cannot release another bottle's admission" passed after 0.002 seconds.
+✔ Test "Regression A2: Early grace timer event at t < expiry is ignored and does not shorten grace" passed after 0.003 seconds.
+✔ Test "Repeated beginQuit calls are idempotent and do not reset cohort or lose tokens" passed after 0.003 seconds.
+✔ Test "One stream read error + other clean EOF in both orders requests incomplete finalization once both end" passed after 0.003 seconds.
+✔ Test "First trigger rule: quit at t=10s sets expiry=40s; later explicit at 15s or 25s leaves 40s" passed after 0.002 seconds.
+✔ Test "Late data payload arriving at t > expiry before delayed timer delivery triggers expiry and is discarded" passed after 0.003 seconds.
+✔ Test "Spawn failure immediately emits incomplete finalization with failure reason" passed after 0.002 seconds.
+✔ Test "Exact deadline tie boundary: chunk at t==expiry before expiry event is accepted; chunk after expiry event is rejected" passed after 0.002 seconds.
+✔ Test "Both clean EOFs before any trigger request reader closure and clean finalization" passed after 0.003 seconds.
+✔ Test "Regression A6: Counters saturate at UInt64.max instead of wrapping and hostile inputs are safely handled" passed after 0.002 seconds.
+✔ Test "Registry checks token counter exhaustion and rejects without state corruption" passed after 0.003 seconds.
+✔ Test "beginQuit closes admissions and snapshots admitted tokens into a draining cohort" passed after 0.003 seconds.
+✔ Test "Metadata record encodes and decodes losslessly via JSON" passed after 0.004 seconds.
+✔ Test "Canonical identity mapping treats aliases as the same bottle" passed after 0.004 seconds.
+✔ Test "Registry rejects invalid maxGlobalAdmissions configuration" passed after 0.004 seconds.
+✔ Test "Registry enforces 1 reservation per bottle and max 2 global admissions" passed after 0.004 seconds.
+✔ Test "Duplicate external session IDs are rejected and cannot inflate count" passed after 0.004 seconds.
+✔ Suite "Diagnostic capture pure core: admission registry, grace reducer, and metadata" passed after 0.005 seconds.
+✔ Test run with 47 tests in 1 suite passed after 0.005 seconds.
 
 ================================================================================
-5. DiagnosticPipeReaderTests (Frozen Suite Regression Run)
+4. DiagnosticPipeReaderTests (Frozen Suite Regression Run)
 ================================================================================
 Command:
 swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticPipeReaderTests
@@ -140,24 +132,49 @@ Exit Code: 0
 
 Output:
 Building for debugging...
-[Computing dependencies]
 [Using on-disk description]
-Build complete! (0.81 secs)
+Build complete! (0.39 secs)
 ◇ Test run started.
 ↳ Testing Library Version: 2084
 ↳ Target Platform: arm64e-apple-macos14.0
 ◇ Suite "Diagnostic pipe reader: real descriptor ownership, nonblocking discipline, and pure core bridge" started.
-✔ Suite "Diagnostic pipe reader: real descriptor ownership, nonblocking discipline, and pure core bridge" passed after 0.037 seconds.
-✔ Test run with 27 tests in 1 suite passed after 0.038 seconds.
+[27 tests executed in suite]
+✔ Test "Event recorder: Reaching capacity trips overflow flag without silent unbounded growth" passed after 0.001 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 5: Primary write failure and cleanup failure are both preserved" passed after 0.001 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 6: Prestart disposal preserves cleanup outcome and unactivated state" passed after 0.001 seconds.
+✔ Test "Atomic generation: 50 concurrent handle constructions produce 50 unique generations" passed after 0.001 seconds.
+✔ Test "Real pipe: Explicit cancellation while writer is still alive reports cancelled and closes once" passed after 0.001 seconds.
+✔ Test "Real pipe: Cancellation requested from inside data callback does not deadlock" passed after 0.001 seconds.
+✔ Test "Syscall seam: Fatal read error captures exact errno and terminates immediately" passed after 0.001 seconds.
+✔ Test "Real pipe: Known binary payload with embedded NUL and split UTF8 sequence preserves exact bytes" passed after 0.001 seconds.
+✔ Test "Real pipe: Two independent readers on shared queue allow healthy reader to coexist after peer EOF" passed after 0.001 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 1: Injected zero-write and fatal errno fail cleanly and quiesce" passed after 0.001 seconds.
+✔ Test "Syscall seam: All-EINTR exhausts 32-operation quota and yields without terminal or hang" passed after 0.001 seconds.
+✔ Test "Syscall seam: EINTR then valid bytes then EAGAIN resumes without terminal callback" passed after 0.001 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 3: Cancel-handler-owned state survives wrapper deallocation" passed after 0.001 seconds.
+✔ Test "Real pipe: Reader and scratch buffer deallocate without retain cycle after close acknowledgement" passed after 0.001 seconds.
+✔ Test "Real pipe: Non-destructive flag inspection on rawFileDescriptor preserves initial flags and O_NONBLOCK" passed after 0.001 seconds.
+✔ Test "Syscall seam: Close failure captures close error in acknowledgement without leaking kernel FD" passed after 0.001 seconds.
+✔ Test "Pure-Core Bridge: Negative seam test - close failure keeps stream unacknowledged in reducer" passed after 0.001 seconds.
+✔ Test "Bounded off-owner cancellation enqueue: 50 concurrent cancel callers enqueue exactly one async block" passed after 0.001 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 2: Controlled abort ensures writer quiescence before reader cancel" passed after 0.001 seconds.
+✔ Test "Pure-Core Bridge: Symmetric EOF order - stdout first, then stderr last with peer write" passed after 0.001 seconds.
+✔ Test "Syscall seam: 64KiB byte quota yields and later pump resumes without data loss or reordering" passed after 0.001 seconds.
+✔ Test "Pure-Core Bridge: Symmetric EOF order - stderr first, then stdout last with peer write" passed after 0.001 seconds.
+✔ Test "Syscall seam: Race permutations settle first terminal outcome and close occurs once" passed after 0.001 seconds.
+✔ Test "Syscall seam: Setup failure preserves both primary errno and cleanup close failure" passed after 0.001 seconds.
+✔ Test "Syscall seam: Setup failure closes transferred descriptor exactly once before throwing" passed after 0.002 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 4: Timeout branch prevents premature downstream reader close" passed after 0.002 seconds.
+✔ Test "Real pipe: Level-triggered DispatchSource resumption above 64KiB via structured nonblocking writer" passed after 0.007 seconds.
+✔ Suite "Diagnostic pipe reader: real descriptor ownership, nonblocking discipline, and pure core bridge" passed after 0.008 seconds.
+✔ Test run with 27 tests in 1 suite passed after 0.008 seconds.
 
 ================================================================================
-Summary of Focused Test Results
+5. Verification Summary
 ================================================================================
-- DiagnosticDiskSinkTests: 5 passed / 0 failed (0.069s)
-- DiagnosticIngressTests: 7 passed / 0 failed (0.084s)
-- DiagnosticCaptureCoreTests: 47 passed / 0 failed (0.020s)
-- DiagnosticPipeReaderTests: 27 passed / 0 failed (0.038s)
-Total: 86 passed / 0 failed across all targeted suites.
-DiagnosticSubprocessCaptureTests was intentionally not run, per slice instructions.
-Whole-app build was not attempted.
-Universal power-loss durability is not claimed.
+- DiagnosticDiskSinkTests: 5/5 passed (0.055s)
+- DiagnosticIngressTests: 7/7 passed (0.056s)
+- DiagnosticCaptureCoreTests: 47/47 passed (0.005s)
+- DiagnosticPipeReaderTests: 27/27 passed (0.008s)
+Total: 86 passed, 0 failed.
+All 86 tests passed with 0 failures, 0 leaks, 0 subprocess dependencies, and 0 network access.

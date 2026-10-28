@@ -30,12 +30,22 @@ struct DiagnosticIngressTests {
         private let lock = NSLock()
         private var streams: [DiagnosticStreamKind: Data] = [.stdout: Data(), .stderr: Data()]
         private var callCount: Int = 0
+        private var activeConsumers: Int = 0
+        private var maxConcurrentConsumers: Int = 0
 
         func append(stream: DiagnosticStreamKind, data: Data) {
             lock.lock()
-            defer { lock.unlock() }
+            activeConsumers += 1
+            if activeConsumers > maxConcurrentConsumers {
+                maxConcurrentConsumers = activeConsumers
+            }
+            let concurrentNow = activeConsumers
             streams[stream]?.append(data)
             callCount += 1
+            activeConsumers -= 1
+            lock.unlock()
+
+            #expect(concurrentNow == 1)
         }
 
         func data(for stream: DiagnosticStreamKind) -> Data {
@@ -48,6 +58,12 @@ struct DiagnosticIngressTests {
             lock.lock()
             defer { lock.unlock() }
             return callCount
+        }
+
+        var maxConcurrency: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return maxConcurrentConsumers
         }
     }
 
@@ -133,6 +149,27 @@ struct DiagnosticIngressTests {
                 }
             }
             return value
+        }
+    }
+
+    private final class WeakBox<T: AnyObject>: @unchecked Sendable {
+        private let lock = NSLock()
+        private weak var _value: T?
+
+        init(_ value: T? = nil) {
+            self._value = value
+        }
+
+        var value: T? {
+            lock.lock()
+            defer { lock.unlock() }
+            return _value
+        }
+
+        func set(_ value: T?) {
+            lock.lock()
+            defer { lock.unlock() }
+            _value = value
         }
     }
 
@@ -390,8 +427,7 @@ struct DiagnosticIngressTests {
     @Test("Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers")
     func testD_lostWakeupAndConcurrency() throws {
         let accumulator = TestDataAccumulator()
-        let drainQueue = DispatchQueue(label: "whiskykit.test.d.drain.queue")
-        let ingress = DiagnosticIngress(drainQueue: drainQueue) { stream, data in
+        let ingress = DiagnosticIngress { stream, data in
             accumulator.append(stream: stream, data: data)
         }
 
@@ -404,10 +440,12 @@ struct DiagnosticIngressTests {
         // Step 1: Controlled empty-to-idle boundary and admission from idle
         #expect(ingress.enqueue(stream: .stdout, data: Data([0x10, 0x11])) == .accepted)
 
-        // Wait boundedly for drainQueue barrier so component empties and settles to idle
-        let idleSema = DispatchSemaphore(value: 0)
-        drainQueue.async { idleSema.signal() }
-        guard idleSema.wait(timeout: .now() + 3.0) == .success else {
+        // Wait boundedly for owner queue acknowledgment so component empties and settles to idle
+        let idleBox = TestWaitBox<Void>()
+        ingress.asyncAcknowledgeForTesting {
+            idleBox.signal(with: ())
+        }
+        guard idleBox.wait(timeoutSeconds: 3.0) != nil else {
             Issue.record("Timed out waiting for initial drain to settle in Test D")
             return
         }
@@ -488,7 +526,8 @@ struct DiagnosticIngressTests {
         #expect(receipt.queueDroppedBytes[.stdout] == 0)
         #expect(receipt.queueDroppedBytes[.stderr] == 0)
 
-        // Real scheduling bounds: at most one drain worker executed concurrently
+        // Real scheduling bounds: strictly serial execution verified across all concurrent producers
+        #expect(accumulator.maxConcurrency == 1)
         #expect(ingress.underlyingState.drainRunningHighwater <= 1)
         #expect(ingress.underlyingState.drainScheduleCount >= 2)
     }
@@ -499,9 +538,8 @@ struct DiagnosticIngressTests {
     func testE_throwingConsumerFailClosedMode() throws {
         let gate = TestGate()
         let counter = AtomicCounter()
-        let drainQueue = DispatchQueue(label: "whiskykit.test.e.drain.queue")
 
-        let ingress = DiagnosticIngress(drainQueue: drainQueue) { stream, data in
+        let ingress = DiagnosticIngress { stream, data in
             let callIndex = counter.increment()
             if callIndex == 1 {
                 // First chunk succeeds
@@ -538,10 +576,12 @@ struct DiagnosticIngressTests {
         // Release gate to let chunk 2 throw
         gate.open()
 
-        // Wait boundedly for drain worker to finish failure handling via serial queue barrier
-        let drainBarrier = DispatchSemaphore(value: 0)
-        drainQueue.async { drainBarrier.signal() }
-        guard drainBarrier.wait(timeout: .now() + 3.0) == .success else {
+        // Wait boundedly for drain worker to finish failure handling via owner queue acknowledgment
+        let drainBarrierBox = TestWaitBox<Void>()
+        ingress.asyncAcknowledgeForTesting {
+            drainBarrierBox.signal(with: ())
+        }
+        guard drainBarrierBox.wait(timeoutSeconds: 3.0) != nil else {
             Issue.record("Timed out waiting for drain barrier in Test E")
             return
         }
@@ -580,11 +620,19 @@ struct DiagnosticIngressTests {
     func testF_boundedFinishRegistrationAndDeallocation() throws {
         let gate = TestGate()
         let completionCounter = AtomicCounter()
+        let consumerRejectionBox = TestWaitBox<Bool>()
+        let ingressBox = WeakBox<DiagnosticIngress>()
 
         let ingress = DiagnosticIngress { stream, data in
+            if let ingress = ingressBox.value {
+                // Verify blocking finish called from consumer context on owner queue returns documented nil rejection
+                let reentrantResult = ingress.finish(timeoutSeconds: 1.0)
+                consumerRejectionBox.signal(with: reentrantResult == nil)
+            }
             gate.arrive()
             gate.pass()
         }
+        ingressBox.set(ingress)
 
         defer {
             gate.open()
@@ -597,6 +645,12 @@ struct DiagnosticIngressTests {
         #expect(ingress.enqueue(stream: .stdout, data: Data([0xAA, 0xBB])) == .accepted)
         guard gate.waitArrival(count: 1, timeoutSeconds: 3.0) else {
             Issue.record("Timed out waiting for consumer to arrive at gate in Test F")
+            return
+        }
+
+        // Verify blocking finish called from consumer context returned nil without deadlocking
+        guard let consumerRejection = consumerRejectionBox.wait(timeoutSeconds: 3.0), consumerRejection else {
+            Issue.record("Expected blocking finish called from consumer context to return documented nil rejection")
             return
         }
 
@@ -659,18 +713,32 @@ struct DiagnosticIngressTests {
         }
         #expect(disp3 == .alreadyFinished(receipt))
 
-        // 10. Weak wrapper deallocation test with bounded quiescence
+        // 10. Verify blocking finish called from owner queue context via async acknowledgment returns documented nil rejection
+        let ownerRejectionBox = TestWaitBox<Bool>()
+        ingress.asyncAcknowledgeForTesting {
+            let res = ingressBox.value?.finish(timeoutSeconds: 1.0)
+            ownerRejectionBox.signal(with: res == nil)
+        }
+        guard let ownerRejection = ownerRejectionBox.wait(timeoutSeconds: 3.0), ownerRejection else {
+            Issue.record("Expected blocking finish called from owner queue context to return documented nil rejection")
+            return
+        }
+
+        // 11. Weak wrapper deallocation test with bounded quiescence
         weak var weakState: DiagnosticIngressState?
-        let testDrainQueue = DispatchQueue(label: "whiskykit.test.f.drain.queue")
         let deallocFinishBox = TestWaitBox<Void>()
+        let quiescedBox = TestWaitBox<Void>()
         do {
-            let tempIngress = DiagnosticIngress(drainQueue: testDrainQueue) { stream, data in
+            let tempIngress = DiagnosticIngress { stream, data in
                 // Fast consumer
             }
             weakState = tempIngress.underlyingState
             tempIngress.enqueue(stream: .stdout, data: Data([0x01]))
             tempIngress.finish { _ in
                 deallocFinishBox.signal(with: ())
+            }
+            tempIngress.asyncAcknowledgeForTesting {
+                quiescedBox.signal(with: ())
             }
             // Wrapper drops here; deinit requests finish
         }
@@ -680,9 +748,7 @@ struct DiagnosticIngressTests {
             return
         }
 
-        let quiescedSema = DispatchSemaphore(value: 0)
-        testDrainQueue.async { quiescedSema.signal() }
-        guard quiescedSema.wait(timeout: .now() + 3.0) == .success else {
+        guard quiescedBox.wait(timeoutSeconds: 3.0) != nil else {
             Issue.record("Timed out waiting for dealloc queue quiescence in Test F")
             return
         }

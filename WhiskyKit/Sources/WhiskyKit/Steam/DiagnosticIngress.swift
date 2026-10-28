@@ -189,12 +189,12 @@ final class IngressRingBuffer {
 public final class DiagnosticIngressState: @unchecked Sendable {
     public typealias Consumer = @Sendable (DiagnosticStreamKind, Data) throws -> Void
 
-    // Lock ordering invariant:
+    // Lock ordering and synchronization:
     // 1. `lock` protects internal state, queue, counters, and drain scheduling.
     // 2. `finishCondition` protects `isTerminalReceiptPublished` and blocking waiter notifications.
-    // 3. `lock` and `finishCondition` are NEVER held simultaneously by any thread.
-    //    Terminal publisher releases `lock` BEFORE acquiring `finishCondition` to broadcast.
-    //    Blocking waiters release `lock` BEFORE acquiring `finishCondition` to wait.
+    // 3. Deadlock prevention: Terminal publisher releases `lock` BEFORE acquiring `finishCondition`
+    //    to broadcast. Blocking waiters may hold `finishCondition` while acquiring `lock` to read
+    //    `terminalReceipt`, which is safe because publisher never holds `lock` when acquiring `finishCondition`.
     private let lock = NSLock()
     private let config: DiagnosticIngressConfiguration
     private let consumer: Consumer
@@ -209,10 +209,34 @@ public final class DiagnosticIngressState: @unchecked Sendable {
     // Drain scheduling flags & scheduler discipline counters
     private var isDrainScheduled: Bool = false
     private var isDraining: Bool = false
-    private var activeDrainWorkers: Int = 0
-    internal private(set) var drainScheduleCount: Int = 0
-    internal private(set) var drainExecutionCount: Int = 0
-    internal private(set) var drainRunningHighwater: Int = 0
+    private var _activeDrainWorkers: Int = 0
+    private var _drainScheduleCount: Int = 0
+    private var _drainExecutionCount: Int = 0
+    private var _drainRunningHighwater: Int = 0
+
+    internal var activeDrainWorkers: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _activeDrainWorkers
+    }
+
+    internal var drainScheduleCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _drainScheduleCount
+    }
+
+    internal var drainExecutionCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _drainExecutionCount
+    }
+
+    internal var drainRunningHighwater: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _drainRunningHighwater
+    }
 
     // Lifecycle & sink status
     private var isSealed: Bool = false
@@ -245,12 +269,12 @@ public final class DiagnosticIngressState: @unchecked Sendable {
 
     init(
         config: DiagnosticIngressConfiguration,
-        drainQueue: DispatchQueue,
         consumer: @escaping Consumer
     ) {
         self.config = config
-        self.drainQueue = drainQueue
-        self.drainQueue.setSpecific(key: drainQueueKey, value: ())
+        let queue = DispatchQueue(label: "whiskykit.diagnostic.ingress.drain")
+        queue.setSpecific(key: drainQueueKey, value: ())
+        self.drainQueue = queue
         self.consumer = consumer
         self.ringBuffer = IngressRingBuffer(capacity: config.maxQueuedEntries)
 
@@ -372,7 +396,7 @@ public final class DiagnosticIngressState: @unchecked Sendable {
         guard !isDrainScheduled && !isDraining else { return }
         guard !ringBuffer.isEmpty || (isSealed && inFlightBytes == 0) else { return }
         isDrainScheduled = true
-        drainScheduleCount += 1
+        _drainScheduleCount += 1
         drainQueue.async { [weak self] in
             self?.performDrain()
         }
@@ -385,17 +409,16 @@ public final class DiagnosticIngressState: @unchecked Sendable {
         let quotaEntries = config.drainQuotaEntries
 
         lock.lock()
-        activeDrainWorkers += 1
-        drainExecutionCount += 1
-        if activeDrainWorkers > drainRunningHighwater {
-            drainRunningHighwater = activeDrainWorkers
+        _activeDrainWorkers += 1
+        _drainExecutionCount += 1
+        if _activeDrainWorkers > _drainRunningHighwater {
+            _drainRunningHighwater = _activeDrainWorkers
         }
         lock.unlock()
 
         defer {
             lock.lock()
-            activeDrainWorkers -= 1
-            isDraining = false
+            _activeDrainWorkers -= 1
             lock.unlock()
         }
 
@@ -682,6 +705,13 @@ public final class DiagnosticIngressState: @unchecked Sendable {
         defer { lock.unlock() }
         return isFinished
     }
+
+    // Smallest internal test-only asynchronous acknowledgment seam on the private owner queue
+    internal func asyncAcknowledgeForTesting(_ callback: @escaping @Sendable () -> Void) {
+        drainQueue.async {
+            callback()
+        }
+    }
 }
 
 // MARK: - Public DiagnosticIngress Handle
@@ -691,14 +721,18 @@ public final class DiagnosticIngress: Sendable {
 
     public init(
         configuration: DiagnosticIngressConfiguration = .default,
-        drainQueue: DispatchQueue = DispatchQueue(label: "whiskykit.diagnostic.ingress.drain"),
         consumer: @escaping @Sendable (DiagnosticStreamKind, Data) throws -> Void
     ) {
-        self.state = DiagnosticIngressState(config: configuration, drainQueue: drainQueue, consumer: consumer)
+        self.state = DiagnosticIngressState(config: configuration, consumer: consumer)
     }
 
     public var underlyingState: DiagnosticIngressState {
         state
+    }
+
+    // Smallest internal test-only asynchronous acknowledgment seam forwarding to private owner queue
+    internal func asyncAcknowledgeForTesting(_ callback: @escaping @Sendable () -> Void) {
+        state.asyncAcknowledgeForTesting(callback)
     }
 
     @discardableResult

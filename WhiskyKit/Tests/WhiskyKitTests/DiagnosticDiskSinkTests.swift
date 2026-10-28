@@ -19,6 +19,8 @@ private final class MockFaultInjectingFileAdapter: DiskSinkFileAdapter, @uncheck
 
     // Recorded operations
     var closeAttempts: [Int32: Int] = [:]
+    var closeInvocationCount = 0
+    var failOnCloseInvocation: Int? = nil
     var closeAttemptsByResource: [String: Int] = [:]
     var openedDescriptors: Set<Int32> = []
     var fdFileNames: [Int32: String] = [:]
@@ -32,6 +34,8 @@ private final class MockFaultInjectingFileAdapter: DiskSinkFileAdapter, @uncheck
     var failOnWriteCommittedBytes: Int? = nil
     var failOnWriteAmbiguous: Bool = false
     var shortWriteLimit: Int? = nil
+    var throwShortWriteOnInvocation: Int? = nil
+    var failOnSyncFileName: String? = nil
 
     var failOnSeek: Bool = false
     var seekErrno: Int32 = EIO
@@ -108,6 +112,11 @@ private final class MockFaultInjectingFileAdapter: DiskSinkFileAdapter, @uncheck
 
     func write(fd: Int32, data: Data) throws -> Int {
         writeInvocationCount += 1
+        if writeInvocationCount == throwShortWriteOnInvocation {
+            let count = min(37, data.count)
+            _ = try underlying.write(fd: fd, data: Data(data.prefix(count)))
+            throw DiagnosticDiskSinkError.shortWrite(operation: .write, bytesCommitted: count, expectedBytes: data.count)
+        }
         if let targetInvocation = failOnWriteInvocation, writeInvocationCount == targetInvocation {
             if failOnWriteAmbiguous {
                 throw DiagnosticDiskSinkError.ioError(
@@ -151,14 +160,19 @@ private final class MockFaultInjectingFileAdapter: DiskSinkFileAdapter, @uncheck
     }
 
     func sync(fd: Int32) throws {
-        if failOnSync {
+        if failOnSync || (failOnSyncFileName != nil && fdFileNames[fd]?.contains(failOnSyncFileName!) == true) {
             throw DiagnosticDiskSinkError.ioError(operation: .sync, errno: syncErrno, message: "Mock sync error")
         }
         try underlying.sync(fd: fd)
     }
 
     func close(fd: Int32) throws {
+        closeInvocationCount += 1
         closeAttempts[fd, default: 0] += 1
+        if closeInvocationCount == failOnCloseInvocation {
+            _ = try? underlying.close(fd: fd)
+            throw DiagnosticDiskSinkError.ioError(operation: .close, errno: EIO, message: "Consumed traversal descriptor")
+        }
         if let name = fdFileNames[fd] {
             closeAttemptsByResource[name, default: 0] += 1
         }
@@ -466,6 +480,8 @@ struct DiagnosticDiskSinkTests {
         }
 
         let receiptPartialSuffix = sinkPartialSuffix.abort()
+        #expect(receiptPartialSuffix.stdoutRecord.landedUniqueBytes == 137)
+        #expect(receiptPartialSuffix.stdoutRecord.physicalWriteBytes == 137)
         #expect(receiptPartialSuffix.stdoutRecord.retainedBytesOnDisk == 137)
         #expect(receiptPartialSuffix.stdoutRecord.retainedHeadBytes == 100)
         #expect(receiptPartialSuffix.stdoutRecord.retainedTailBytes == 37)
@@ -618,12 +634,15 @@ struct DiagnosticDiskSinkTests {
         setupCleanupFailAdapter.failOnOpenFileName = "stderr.bin"
         setupCleanupFailAdapter.failOnUnlinkAt = true
 
-        #expect(throws: DiagnosticDiskSinkError.self) {
-            _ = try DiagnosticDiskSink(
-                rootDirectoryURL: fixtureRoot,
-                sessionName: "setup-cleanup-fail",
-                fileAdapter: setupCleanupFailAdapter
-            )
+        do {
+            _ = try DiagnosticDiskSink(rootDirectoryURL: fixtureRoot, sessionName: "setup-cleanup-fail", fileAdapter: setupCleanupFailAdapter)
+            Issue.record("Expected setup failure")
+        } catch let DiagnosticDiskSinkError.setupFailed(primary, cleanup) {
+            if case let .ioError(operation, code, _, _) = primary {
+                #expect(operation == .open)
+                #expect(code == EACCES)
+            } else { Issue.record("Lost primary open failure") }
+            #expect(cleanup != nil)
         }
     }
 
@@ -686,4 +705,120 @@ struct DiagnosticDiskSinkTests {
             try validSink.write(stream: .stdout, data: oversizedData)
         }
     }
+
+    @Test("Partial candidate: head/suffix returned and thrown progress, ambiguous head, repeated compaction failure")
+    func testRemainingProgressRegressions() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "remaining-progress")
+        defer { Self.cleanupFixtureDirectory(root) }
+        let config = try DiagnosticDiskSinkConfiguration(maxBytesPerStream: 500, headBudget: 100, tailBudget: 200, tailTrimThreshold: 200)
+        let chunk = Data((0..<600).map { UInt8($0 % 251) })
+        // One-shot fault rows use the same production adapter for actual prefix writes.
+        for row in 0..<5 {
+            let adapter = MockFaultInjectingFileAdapter()
+            if row == 0 { adapter.failOnWriteInvocation = 1; adapter.failOnWriteCommittedBytes = 37 }
+            if row == 1 { adapter.throwShortWriteOnInvocation = 1 }
+            if row == 2 { adapter.throwShortWriteOnInvocation = 2 }
+            if row == 3 { adapter.failOnWriteInvocation = 1; adapter.failOnWriteAmbiguous = true }
+            if row == 4 { adapter.failOnTruncate = true }
+            let sink = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "row-\(row)", configuration: config, fileAdapter: adapter)
+            defer { _ = sink.abort() }
+            #expect(throws: DiagnosticDiskSinkError.self) { try sink.write(stream: .stdout, data: chunk) }
+            let record = sink.abort().stdoutRecord
+            if row <= 2 {
+                let expected = row == 2 ? 137 : 37
+                let bytes = try Data(contentsOf: sink.directoryURL.appendingPathComponent("stdout.bin"))
+                #expect(record.diskPayloadKnown)
+                #expect(record.retainedBytesOnDisk == UInt64(expected))
+                #expect(record.landedUniqueBytes == UInt64(expected))
+                #expect(record.physicalWriteBytes == UInt64(expected))
+                #expect(bytes.count == expected)
+                #expect(bytes.prefix(min(100, expected)) == chunk.prefix(min(100, expected)))
+            } else {
+                #expect(!record.diskPayloadKnown)
+            }
+            #expect(record.compactionOutcome != .succeeded)
+        }
+        let underAdapter = MockFaultInjectingFileAdapter()
+        underAdapter.throwShortWriteOnInvocation = 1
+        let under = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "under", configuration: config, fileAdapter: underAdapter)
+        defer { _ = under.abort() }
+        #expect(throws: DiagnosticDiskSinkError.self) { try under.write(stream: .stdout, data: Data(chunk.prefix(50))) }
+        let underRecord = under.abort().stdoutRecord
+        #expect(underRecord.landedUniqueBytes == 37)
+        #expect(underRecord.retainedBytesOnDisk == 37)
+        #expect(underRecord.diskPayloadKnown)
+
+        let repeatAdapter = MockFaultInjectingFileAdapter()
+        let repeated = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "repeat", configuration: config, fileAdapter: repeatAdapter)
+        defer { _ = repeated.abort() }
+        try repeated.write(stream: .stdout, data: chunk)
+        repeatAdapter.failOnSeek = true
+        #expect(throws: DiagnosticDiskSinkError.self) { try repeated.write(stream: .stdout, data: chunk) }
+        let repeatedRecord = repeated.abort().stdoutRecord
+        if case let .failed(operation, _, _) = repeatedRecord.compactionOutcome {
+            #expect(operation == .seek)
+        } else { Issue.record("Second compaction failure was not recorded") }
+        #expect(!repeatedRecord.diskPayloadKnown)
+    }
+
+    @Test("Partial candidate: metadata primary and cleanup failures stay separate; payload sync and close outcomes")
+    func testRemainingCleanupRegressions() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "remaining-cleanup")
+        defer { Self.cleanupFixtureDirectory(root) }
+        for row in 0..<3 {
+            let adapter = MockFaultInjectingFileAdapter()
+            if row == 0 {
+                adapter.failOnWriteInvocation = 1
+                adapter.failOnWriteCommittedBytes = 0
+                adapter.failOnCloseFileName = ".persistence.json.tmp"
+            } else {
+                adapter.failOnSyncFileName = ".persistence.json.tmp"
+                adapter.failOnUnlinkAt = true
+            }
+            if row == 2 { adapter.failOnCloseFileName = ".persistence.json.tmp" }
+            let sink = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "metadata-\(row)", fileAdapter: adapter)
+            defer { _ = sink.abort() }
+            let receipt = sink.finish()
+            #expect(receipt.failure != nil)
+            #expect(receipt.cleanupError != nil)
+            #expect(!receipt.sidecarPublished)
+            if row == 0 { #expect(receipt.metadataRecord.writeOutcome != .succeeded) }
+            else { #expect(receipt.metadataRecord.syncOutcome != .succeeded) }
+            #expect(receipt.metadataRecord.closeOutcome != .notAttempted)
+            for (name, count) in adapter.closeAttemptsByResource where name.contains(".persistence.json.tmp") {
+                #expect(count == 1)
+            }
+        }
+        let setupAdapter = MockFaultInjectingFileAdapter()
+        setupAdapter.failOnCloseInvocation = 1
+        do {
+            _ = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "traversal", fileAdapter: setupAdapter)
+            Issue.record("Traversal close failure must fail setup")
+        } catch let DiagnosticDiskSinkError.setupFailed(primary, _) {
+            // A nested setup failure preserves the next-fd cleanup result.
+            if case .setupFailed = primary {} else {
+                if case let .ioError(operation, _, _, _) = primary {
+                    #expect(operation == .close)
+                } else { Issue.record("Lost traversal close error") }
+            }
+        }
+        let directoryAdapter = MockFaultInjectingFileAdapter()
+        directoryAdapter.failOnDirectorySync = true
+        let directorySink = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "directory-sync", fileAdapter: directoryAdapter)
+        defer { _ = directorySink.abort() }
+        let directoryReceipt = directorySink.finish()
+        #expect(directoryReceipt.sidecarPublished)
+        #expect(!directoryReceipt.parentDirectorySynced)
+        #expect(directoryReceipt.metadataRecord.directorySyncOutcome != .succeeded)
+        let adapter = MockFaultInjectingFileAdapter()
+        adapter.failOnSyncFileName = "stdout.bin"
+        adapter.failOnCloseFileName = "stdout.bin"
+        let sink = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "payload", fileAdapter: adapter)
+        defer { _ = sink.abort() }
+        let receipt = sink.finish()
+        #expect(receipt.stdoutRecord.syncOutcome != .succeeded)
+        #expect(receipt.stdoutRecord.closeOutcome != .succeeded)
+        #expect(adapter.closeAttemptsByResource["stdout.bin"] == 1)
+    }
+
 }

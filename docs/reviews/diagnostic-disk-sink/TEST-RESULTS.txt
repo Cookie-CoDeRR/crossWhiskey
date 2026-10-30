@@ -1,184 +1,455 @@
-=== TEST EXECUTION LOG: SLICE 5 PARTIAL CANDIDATE VALIDATION ===
-Target Branch: review/diagnostic-disk-sink-partial-20261028-132900
-Base Commit: 24c2ff5408d29dda0c65cf73a9d8a87f8c1d4f05
-Host Platform: arm64-apple-darwin24.0.0 (macOS 15.0)
-Testing Framework: Swift Testing (Testing Library Version 2084)
-
-Note: Absolute paths have been sanitized to <WORKTREE> and <CACHE>.
-
-================================================================================
-1. DiagnosticDiskSinkTests (Suite Execution)
-================================================================================
-Command:
-swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticDiskSinkTests
-Exit Code: 0
-
-Output:
 Building for debugging...
-[Computing dependencies]
-Build complete! (0.50 secs)
+[1 / 1] WhiskyKitTests-product
+Build complete! (0.21 secs)
+Test Suite 'Selected tests' started at 2026-10-30 23:58:07.924.
+Test Suite 'WhiskyKitTests.xctest' started at 2026-10-30 23:58:07.924.
+Test Suite 'DiagnosticExporterTests' started at 2026-10-30 23:58:07.924.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryClear]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryClear]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryFIFO]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryFIFO]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryLoadNonexistent]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryLoadNonexistent]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryRoundTrip]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryRoundTrip]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryTopSignaturesCapped]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testDiagnosisHistoryTopSignaturesCapped]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testFormatDateForFilename]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testFormatDateForFilename]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorEnvironmentRedactsHomePaths]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorEnvironmentRedactsHomePaths]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorHomePaths]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorHomePaths]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorHomePathsMultipleOccurrences]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorHomePathsMultipleOccurrences]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorIncludeSensitive]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorIncludeSensitive]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorLogText]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorLogText]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorSensitiveKeyCaseInsensitive]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorSensitiveKeyCaseInsensitive]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorSensitiveKeys]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRedactorSensitiveKeys]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRemediationTimelineClear]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRemediationTimelineClear]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRemediationTimelineFIFO]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRemediationTimelineFIFO]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRemediationTimelineRoundTrip]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testRemediationTimelineRoundTrip]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testSanitizeName]' started.
+Test Case '-[WhiskyKitTests.DiagnosticExporterTests testSanitizeName]' passed (0.000 seconds).
+Test Suite 'DiagnosticExporterTests' passed at 2026-10-30 23:58:07.929.
+	 Executed 17 tests, with 0 failures (0 unexpected) in 0.004 (0.005) seconds
+Test Suite 'DiagnosticReportTests' started at 2026-10-30 23:58:07.929.
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testCrashDiagnosisCodableWrapperEncodes]' started.
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testCrashDiagnosisCodableWrapperEncodes]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportContainsCategoryCounts]' started.
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportContainsCategoryCounts]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportContainsHeadline]' started.
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportContainsHeadline]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportContainsSections]' started.
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportContainsSections]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportEmptyDiagnosis]' started.
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportEmptyDiagnosis]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportRedacted]' started.
+Test Case '-[WhiskyKitTests.DiagnosticReportTests testMarkdownReportRedacted]' passed (0.000 seconds).
+Test Suite 'DiagnosticReportTests' passed at 2026-10-30 23:58:07.931.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.001 (0.002) seconds
+Test Suite 'FixApplicatorTests' started at 2026-10-30 23:58:07.931.
+Test Case '-[WhiskyKitTests.FixApplicatorTests testApplyEnhancedDiagnosticsSetsTheProgramPreset]' started.
+Test Case '-[WhiskyKitTests.FixApplicatorTests testApplyEnhancedDiagnosticsSetsTheProgramPreset]' passed (0.002 seconds).
+Test Case '-[WhiskyKitTests.FixApplicatorTests testUndoEnhancedDiagnosticsRestoresPreset]' started.
+Test Case '-[WhiskyKitTests.FixApplicatorTests testUndoEnhancedDiagnosticsRestoresPreset]' passed (0.001 seconds).
+Test Suite 'FixApplicatorTests' passed at 2026-10-30 23:58:07.934.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.003 (0.003) seconds
+Test Suite 'LauncherDiagnosticsTests' started at 2026-10-30 23:58:07.934.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testAutoEnableDXVKForRockstar]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testAutoEnableDXVKForRockstar]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testAutoEnableDXVKNotTriggeredForSteam]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testAutoEnableDXVKNotTriggeredForSteam]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testAutoLocaleDoesNotSetEnvironment]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testAutoLocaleDoesNotSetEnvironment]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testAutoLocaleRawValueIsEmpty]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testAutoLocaleRawValueIsEmpty]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testBottleLauncherConfigCodable]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testBottleLauncherConfigCodable]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testConnectionPoolingEnvironmentApplied]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testConnectionPoolingEnvironmentApplied]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testCustomNetworkTimeoutApplied]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testCustomNetworkTimeoutApplied]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithAllGPUVendors]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithAllGPUVendors]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithAllLauncherTypes]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithAllLauncherTypes]' passed (0.002 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithDefaultBottleSettings]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithDefaultBottleSettings]' passed (0.003 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithExtremeTimeout]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithExtremeTimeout]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithLauncherCompatibilityEnabled]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithLauncherCompatibilityEnabled]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithNilLauncher]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testDiagnosticsWithNilLauncher]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testEnglishLocaleIncludesUTF8]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testEnglishLocaleIncludesUTF8]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testEnvironmentVariablesWithLauncherCompatibility]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testEnvironmentVariablesWithLauncherCompatibility]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testEnvironmentVariablesWithoutLauncherCompatibility]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testEnvironmentVariablesWithoutLauncherCompatibility]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testGPUSpoofingDisabled]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testGPUSpoofingDisabled]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testGPUSpoofingEnvironmentValidation]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testGPUSpoofingEnvironmentValidation]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testLauncherEnvironmentMergePrecedence]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testLauncherEnvironmentMergePrecedence]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testLauncherSettingsDefaultsAfterDecode]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testLauncherSettingsDefaultsAfterDecode]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testLauncherSettingsPersistence]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testLauncherSettingsPersistence]' passed (0.003 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testLocaleOverrideConfiguration]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testLocaleOverrideConfiguration]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testMacOSCompatibilityEnvironmentApplied]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testMacOSCompatibilityEnvironmentApplied]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testNetworkTimeoutOnlyAppliedWhenNonDefault]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testNetworkTimeoutOnlyAppliedWhenNonDefault]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testRecommendedLocales]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testRecommendedLocales]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testRockstarRequiresDXVK]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testRockstarRequiresDXVK]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testSteamLocaleNotOverwritten]' started.
+Test Case '-[WhiskyKitTests.LauncherDiagnosticsTests testSteamLocaleNotOverwritten]' passed (0.001 seconds).
+Test Suite 'LauncherDiagnosticsTests' passed at 2026-10-30 23:58:07.963.
+	 Executed 27 tests, with 0 failures (0 unexpected) in 0.027 (0.028) seconds
+Test Suite 'StabilityDiagnosticsTests' started at 2026-10-30 23:58:07.963.
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testReportGenerationWithEmptyLogsFolder]' started.
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testReportGenerationWithEmptyLogsFolder]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testReportGenerationWithMissingLogsFolder]' started.
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testReportGenerationWithMissingLogsFolder]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testReportIncludesArchitectureLine]' started.
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testReportIncludesArchitectureLine]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testTailHandlesInvalidUTF8]' started.
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testTailHandlesInvalidUTF8]' passed (0.001 seconds).
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testTailKeepsLastLinesBounded]' started.
+Test Case '-[WhiskyKitTests.StabilityDiagnosticsTests testTailKeepsLastLinesBounded]' passed (0.001 seconds).
+Test Suite 'StabilityDiagnosticsTests' passed at 2026-10-30 23:58:07.967.
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.004 (0.004) seconds
+Test Suite 'TroubleshootingFlowEngineEntryTests' started at 2026-10-30 23:58:07.967.
+Test Case '-[WhiskyKitTests.TroubleshootingFlowEngineEntryTests testBottleDiagnosticsEntryStartsAtSymptomSelection]' started.
+Test Case '-[WhiskyKitTests.TroubleshootingFlowEngineEntryTests testBottleDiagnosticsEntryStartsAtSymptomSelection]' passed (0.002 seconds).
+Test Suite 'TroubleshootingFlowEngineEntryTests' passed at 2026-10-30 23:58:07.969.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.002 (0.002) seconds
+Test Suite 'ValidatePrefixTests' started at 2026-10-30 23:58:07.969.
+Test Case '-[WhiskyKitTests.ValidatePrefixTests testValidatePrefixDiagnosticsIncludesPrefixPath]' started.
+Test Case '-[WhiskyKitTests.ValidatePrefixTests testValidatePrefixDiagnosticsIncludesPrefixPath]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.ValidatePrefixTests testValidatePrefixDiagnosticsRecordsEvents]' started.
+Test Case '-[WhiskyKitTests.ValidatePrefixTests testValidatePrefixDiagnosticsRecordsEvents]' passed (0.000 seconds).
+Test Suite 'ValidatePrefixTests' passed at 2026-10-30 23:58:07.969.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'WhiskyWineSetupDiagnosticsTests' started at 2026-10-30 23:58:07.969.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testEventTruncationKeepsMostRecent]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testEventTruncationKeepsMostRecent]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportIncludesHeaderAndStage]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportIncludesHeaderAndStage]' passed (0.013 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportIncludesInstallAttemptsSection]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportIncludesInstallAttemptsSection]' passed (0.004 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportIncludesVersionSection]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportIncludesVersionSection]' passed (0.005 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportSanitizesURLQueries]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportSanitizesURLQueries]' passed (0.005 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportTruncationRespectsLimit]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testReportTruncationRespectsLimit]' passed (0.005 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testResetClearsSessionAndEvents]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testResetClearsSessionAndEvents]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testResetDownloadStatePreservesInstallTimestamps]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testResetDownloadStatePreservesInstallTimestamps]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionHeaderOnlyWhenNoRuntime]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionHeaderOnlyWhenNoRuntime]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionOmitsBlankDXVK]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionOmitsBlankDXVK]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionOmitsDXMTWhenAbsent]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionOmitsDXMTWhenAbsent]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionOmitsDXVKWhenAbsent]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionOmitsDXVKWhenAbsent]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionRendersDXMT]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionRendersDXMT]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionRendersRuntimeAndDXVK]' started.
+Test Case '-[WhiskyKitTests.WhiskyWineSetupDiagnosticsTests testVersionSectionRendersRuntimeAndDXVK]' passed (0.000 seconds).
+Test Suite 'WhiskyWineSetupDiagnosticsTests' passed at 2026-10-30 23:58:08.002.
+	 Executed 14 tests, with 0 failures (0 unexpected) in 0.032 (0.033) seconds
+Test Suite 'WinePrefixDiagnosticsTests' started at 2026-10-30 23:58:08.002.
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testEventsAreTimestamped]' started.
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testEventsAreTimestamped]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testEventTruncationKeepsMostRecent]' started.
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testEventTruncationKeepsMostRecent]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testReportIncludesAppDataState]' started.
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testReportIncludesAppDataState]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testReportIncludesHeaderAndPrefixState]' started.
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testReportIncludesHeaderAndPrefixState]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testReportTruncationRespectsLimit]' started.
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testReportTruncationRespectsLimit]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testReportWithoutErrorOmitsErrorLine]' started.
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testReportWithoutErrorOmitsErrorLine]' passed (0.000 seconds).
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testSessionIDIsUnique]' started.
+Test Case '-[WhiskyKitTests.WinePrefixDiagnosticsTests testSessionIDIsUnique]' passed (0.000 seconds).
+Test Suite 'WinePrefixDiagnosticsTests' passed at 2026-10-30 23:58:08.003.
+	 Executed 7 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'WinePrefixValidationResultTests' started at 2026-10-30 23:58:08.003.
+Test Case '-[WhiskyKitTests.WinePrefixValidationResultTests testValidationResultDiagnosticsProperty]' started.
+Test Case '-[WhiskyKitTests.WinePrefixValidationResultTests testValidationResultDiagnosticsProperty]' passed (0.000 seconds).
+Test Suite 'WinePrefixValidationResultTests' passed at 2026-10-30 23:58:08.004.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'WhiskyKitTests.xctest' passed at 2026-10-30 23:58:08.004.
+	 Executed 82 tests, with 0 failures (0 unexpected) in 0.076 (0.079) seconds
+Test Suite 'Selected tests' passed at 2026-10-30 23:58:08.004.
+	 Executed 82 tests, with 0 failures (0 unexpected) in 0.076 (0.080) seconds
 ◇ Test run started.
-↳ Testing Library Version: 2084
+↳ Testing Library Version: 2403
 ↳ Target Platform: arm64e-apple-macos14.0
-◇ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" started.
-◇ Test "Partial candidate: head/suffix returned and thrown progress, ambiguous head, repeated compaction failure" started.
-◇ Test "Test D: Reproducing Cases 2 to 5 - Suffix 37-byte progress, ambiguous failure, single close attempt, preserved temp file, and targeted faults" started.
-◇ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" started.
-◇ Test "Partial candidate: metadata primary and cleanup failures stay separate; payload sync and close outcomes" started.
-◇ Test "Test E: Case 6 - Real owned-fixture ancestor symlinks, final symlinks, existing-session rejection, and chunk policies" started.
-◇ Test "Test B: Case 1 - First 600 / cap 500 / head 100 / tail 200 exact 300 retained bytes and honest never-written middle accounting" started.
-◇ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" started.
-✔ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" passed after 0.007 seconds.
-✔ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" passed after 0.050 seconds.
-✔ Test "Test E: Case 6 - Real owned-fixture ancestor symlinks, final symlinks, existing-session rejection, and chunk policies" passed after 0.051 seconds.
-✔ Test "Test B: Case 1 - First 600 / cap 500 / head 100 / tail 200 exact 300 retained bytes and honest never-written middle accounting" passed after 0.054 seconds.
-✔ Test "Partial candidate: head/suffix returned and thrown progress, ambiguous head, repeated compaction failure" passed after 0.094 seconds.
-✔ Test "Partial candidate: metadata primary and cleanup failures stay separate; payload sync and close outcomes" passed after 0.107 seconds.
-✔ Test "Test D: Reproducing Cases 2 to 5 - Suffix 37-byte progress, ambiguous failure, single close attempt, preserved temp file, and targeted faults" passed after 0.109 seconds.
-✔ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" passed after 0.109 seconds.
-✔ Test run with 7 tests in 1 suite passed after 0.110 seconds.
-
-================================================================================
-2. DiagnosticIngressTests (Frozen Suite Regression Run)
-================================================================================
-Command:
-swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticIngressTests
-Exit Code: 0
-
-Output:
-Building for debugging...
-[Computing dependencies]
-Build complete! (0.88 secs)
-◇ Test run started.
-↳ Testing Library Version: 2084
-↳ Target Platform: arm64e-apple-macos14.0
-◇ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" started.
-◇ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" started.
-◇ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" started.
-◇ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" started.
-◇ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" started.
-◇ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" started.
-◇ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" started.
-◇ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" started.
-✔ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" passed after 0.004 seconds.
-✔ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" passed after 0.004 seconds.
-✔ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" passed after 0.004 seconds.
-✔ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" passed after 0.004 seconds.
-✔ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" passed after 0.004 seconds.
-✔ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" passed after 0.054 seconds.
-✔ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" passed after 0.063 seconds.
-✔ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" passed after 0.064 seconds.
-✔ Test run with 7 tests in 1 suite passed after 0.064 seconds.
-
-================================================================================
-3. DiagnosticCaptureCoreTests (Frozen Suite Regression Run)
-================================================================================
-Command:
-swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticCaptureCoreTests
-Exit Code: 0
-
-Output:
-Building for debugging...
-[Computing dependencies]
-Build complete! (0.66 secs)
-◇ Test run started.
-↳ Testing Library Version: 2084
-↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Steam session diagnostics: orchestrator route" started.
+◇ Suite "Diagnostic subprocess capture: controlled subprocess, verified readers, reducer bridge, and in-memory metadata" started.
 ◇ Suite "Diagnostic capture pure core: admission registry, grace reducer, and metadata" started.
-[47 tests executed in suite]
-✔ Test "Late launcher exit observation updates launcher record without mutating sealed capture outcome" passed after 0.004 seconds.
-✔ Test "Metadata mapper preserves custom preset, winedebug values, and launcher command" passed after 0.004 seconds.
-✔ Test "Repeated beginQuit calls are idempotent and do not reset cohort or lose tokens" passed after 0.005 seconds.
-✔ Test "Grace expiry emits close intents for ONLY remaining open readers" passed after 0.005 seconds.
-✔ Test "Both clean EOFs before any trigger request reader closure and clean finalization" passed after 0.004 seconds.
-✔ Test "Regression A3: Late non-data events (cleanEOF at t > expiry) cannot bypass deadline or yield clean" passed after 0.005 seconds.
-✔ Test "Two stream errors during grace finalize incomplete immediately without waiting for timer expiry" passed after 0.005 seconds.
-✔ Test "Stale token release after readmission is rejected harmlessly and does not release new capture" passed after 0.005 seconds.
-✔ Test "Regression A1: Repeated injected generator values across same-bottle release/readmit do not reuse token identity" passed after 0.004 seconds.
-✔ Test "Closure and finalization acknowledgement seals terminal state and gates resource readiness" passed after 0.005 seconds.
-✔ Test "Gate 5: Pure metadata mapper preserves reducer-generated spawnError across requested, sealed, and failed phases" passed after 0.004 seconds.
-✔ Test "Gate 2: Central expiry must not overwrite pending, sealed or failed finalization on late events" passed after 0.004 seconds.
-✔ Test "Metadata accounting maps queue, sink, and retention drops accurately with overflow flag and optional disk count" passed after 0.004 seconds.
-✔ Test "Repeated quit triggers do not extend or reset expiry" passed after 0.004 seconds.
-✔ Test "Registry mints unique deterministic tokens from monotonic counter" passed after 0.004 seconds.
-✔ Test "Time input safety: backward event time and overflow duration are safely rejected without wrapping" passed after 0.005 seconds.
-✔ Test "Gate 1: Terminal finalizationFailed allows resource release and cohort drain once readers close" passed after 0.004 seconds.
-✔ Test "Late data payload arriving at t > expiry before delayed timer delivery triggers expiry and is discarded" passed after 0.004 seconds.
-✔ Test "Gate 1: Event-driven end-to-end lifecycle from spawn to clean finalization and closure acks in both orders" passed after 0.005 seconds.
-✔ Test "Regression A6: Counters saturate at UInt64.max instead of wrapping and hostile inputs are safely handled" passed after 0.005 seconds.
-✔ Test "First trigger rule: quit at t=10s sets expiry=40s; later explicit at 15s or 25s leaves 40s" passed after 0.004 seconds.
-✔ Test "Spawn failure immediately emits incomplete finalization with failure reason" passed after 0.004 seconds.
-✔ Test "Repeated release of the same token is harmless and idempotent" passed after 0.005 seconds.
-✔ Test "beginQuit closes admissions and snapshots admitted tokens into a draining cohort" passed after 0.005 seconds.
-✔ Test "Duplicate external session IDs are rejected and cannot inflate count" passed after 0.004 seconds.
-✔ Test "One stream read error + other clean EOF in both orders requests incomplete finalization once both end" passed after 0.005 seconds.
-✔ Test "Exact deadline tie boundary: chunk at t==expiry before expiry event is accepted; chunk after expiry event is rejected" passed after 0.003 seconds.
-✔ Test "Repeated beginQuit after partial drain preserves remaining cohort" passed after 0.004 seconds.
-✔ Test "Gate 1: Read error followed by closure ack leaves healthy stream open until its own end" passed after 0.005 seconds.
-✔ Test "Mixed error + EOF during grace in both temporal orders finalize incomplete immediately" passed after 0.005 seconds.
-✔ Test "Wrong token for a bottle cannot release another bottle's admission" passed after 0.004 seconds.
-✔ Test "Canonical identity mapping treats aliases as the same bottle" passed after 0.005 seconds.
-✔ Test "Regression A4: Reader close acknowledgement does not erase stream readError and unsolicited ack is ignored" passed after 0.005 seconds.
-✔ Test "Registry enforces 1 reservation per bottle and max 2 global admissions" passed after 0.005 seconds.
-✔ Test "Regression A2: Early grace timer event at t < expiry is ignored and does not shorten grace" passed after 0.004 seconds.
-✔ Test "Registry checks token counter exhaustion and rejects without state corruption" passed after 0.005 seconds.
-✔ Test "Registry rejects invalid maxGlobalAdmissions configuration" passed after 0.005 seconds.
-✔ Test "Metadata record encodes and decodes losslessly via JSON" passed after 0.005 seconds.
-✔ Suite "Diagnostic capture pure core: admission registry, grace reducer, and metadata" passed after 0.006 seconds.
-✔ Test run with 47 tests in 1 suite passed after 0.006 seconds.
-
-================================================================================
-4. DiagnosticPipeReaderTests (Frozen Suite Regression Run)
-================================================================================
-Command:
-swift test --package-path <WORKTREE>/WhiskyKit --scratch-path <CACHE>/build --filter DiagnosticPipeReaderTests
-Exit Code: 0
-
-Output:
-Building for debugging...
-[Computing dependencies]
-Build complete! (0.57 secs)
-◇ Test run started.
-↳ Testing Library Version: 2084
-↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" started.
+◇ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" started.
+◇ Test "A launch with a different preset does not reuse a client start made without it" started.
+◇ Suite "Steam session diagnostics: launch gate" started.
+◇ Test "A preset changed mid-launch does not split the session" started.
+◇ Test "The preset reaches startClient and launchGame through the driver protocol" started.
+◇ Test "No preset keeps the legacy flow" started.
+◇ Test "A driver without diagnostics support refuses the session" started.
+◇ Test "Transient settings carry only the preset, and none are built for nil" started.
 ◇ Suite "Diagnostic pipe reader: real descriptor ownership, nonblocking discipline, and pure core bridge" started.
-[27 tests executed in suite]
-✔ Test "Event recorder: Reaching capacity trips overflow flag without silent unbounded growth" passed after 0.002 seconds.
-✔ Test "Atomic generation: 50 concurrent handle constructions produce 50 unique generations" passed after 0.002 seconds.
-✔ Test "Real pipe: Known binary payload with embedded NUL and split UTF8 sequence preserves exact bytes" passed after 0.003 seconds.
-✔ Test "Real pipe: Cancellation requested from inside data callback does not deadlock" passed after 0.002 seconds.
-✔ Test "Structured Bulk Writer Safe Regression 3: Cancel-handler-owned state survives wrapper deallocation" passed after 0.003 seconds.
-✔ Test "Pure-Core Bridge: Negative seam test - close failure keeps stream unacknowledged in reducer" passed after 0.003 seconds.
-✔ Test "Real pipe: Two independent readers on shared queue allow healthy reader to coexist after peer EOF" passed after 0.003 seconds.
-✔ Test "Pure-Core Bridge: Symmetric EOF order - stdout first, then stderr last with peer write" passed after 0.003 seconds.
-✔ Test "Bounded off-owner cancellation enqueue: 50 concurrent cancel callers enqueue exactly one async block" passed after 0.003 seconds.
-✔ Test "Structured Bulk Writer Safe Regression 5: Primary write failure and cleanup failure are both preserved" passed after 0.003 seconds.
-✔ Test "Real pipe: Explicit cancellation while writer is still alive reports cancelled and closes once" passed after 0.003 seconds.
-✔ Test "Structured Bulk Writer Safe Regression 6: Prestart disposal preserves cleanup outcome and unactivated state" passed after 0.003 seconds.
-✔ Test "Syscall seam: Close failure captures close error in acknowledgement without leaking kernel FD" passed after 0.003 seconds.
-✔ Test "Syscall seam: 64KiB byte quota yields and later pump resumes without data loss or reordering" passed after 0.003 seconds.
-✔ Test "Real pipe: Reader and scratch buffer deallocate without retain cycle after close acknowledgement" passed after 0.003 seconds.
-✔ Test "Real pipe: Non-destructive flag inspection on rawFileDescriptor preserves initial flags and O_NONBLOCK" passed after 0.003 seconds.
-✔ Test "Syscall seam: All-EINTR exhausts 32-operation quota and yields without terminal or hang" passed after 0.003 seconds.
-✔ Test "Syscall seam: Fatal read error captures exact errno and terminates immediately" passed after 0.003 seconds.
-✔ Test "Syscall seam: EINTR then valid bytes then EAGAIN resumes without terminal callback" passed after 0.003 seconds.
-✔ Test "Structured Bulk Writer Safe Regression 4: Timeout branch prevents premature downstream reader close" passed after 0.003 seconds.
-✔ Test "Pure-Core Bridge: Symmetric EOF order - stderr first, then stdout last with peer write" passed after 0.003 seconds.
-✔ Test "Syscall seam: Race permutations settle first terminal outcome and close occurs once" passed after 0.003 seconds.
-✔ Test "Structured Bulk Writer Safe Regression 1: Injected zero-write and fatal errno fail cleanly and quiesce" passed after 0.003 seconds.
-✔ Test "Syscall seam: Setup failure preserves both primary errno and cleanup close failure" passed after 0.003 seconds.
-✔ Test "Syscall seam: Setup failure closes transferred descriptor exactly once before throwing" passed after 0.003 seconds.
-✔ Test "Structured Bulk Writer Safe Regression 2: Controlled abort ensures writer quiescence before reader cancel" passed after 0.003 seconds.
-✔ Test "Real pipe: Level-triggered DispatchSource resumption above 64KiB via structured nonblocking writer" passed after 0.012 seconds.
-✔ Suite "Diagnostic pipe reader: real descriptor ownership, nonblocking discipline, and pure core bridge" passed after 0.012 seconds.
-✔ Test run with 27 tests in 1 suite passed after 0.012 seconds.
-
-================================================================================
-5. Verification Summary
-================================================================================
-- DiagnosticDiskSinkTests: 7/7 passed (0.110s)
-- DiagnosticIngressTests: 7/7 passed (0.064s)
-- DiagnosticCaptureCoreTests: 47/47 passed (0.006s)
-- DiagnosticPipeReaderTests: 27/27 passed (0.012s)
-Total: 88 passed, 0 failed.
-All 88 tests passed with 0 test failures, 0 build failures, worktree-local caches, and zero network calls.
+◇ Test "A running client refuses a diagnostic session before any start" started.
+◇ Test "Gate 1 Seam: Teardown receipt success strictly requires timer cancellation acknowledgement" started.
+◇ Test "Gate 1 Seam: Failed signal and wait error cannot produce successful cleanup receipt" started.
+◇ Test "Case B: Child closes stdout then emits complete stderr and exits nonzero status 7" started.
+◇ Test "Case A: Successful finite child produces >64KiB binary payloads on both streams and clean finalization" started.
+◇ Test "Gate 1 Seam: Serialized lifecycle owner guarantees signal is never issued after reap" started.
+◇ Test "Case D: Controlled watchdog timeout cancels readers, awaits close, then terminates and reaps child" started.
+◇ Test "Gate 4 Seam: Control pipe consuming read ownership cleans on early setup failure" started.
+◇ Test "Gate 1 Seam: Lifecycle owner keeps observing until actual reap after cleanup requested" started.
+◇ Test "Gate 4 Seam: Bridge start second reader failure cancels and awaits first reader" started.
+◇ Test "Gate 4 Seam: Bridge start first reader failure cleans untransferred descriptor" started.
+◇ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" started.
+◇ Test "Gate 2 Ordering: Spawn event strictly precedes immediately buffered child data and EOF" started.
+◇ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" started.
+◇ Test "Case C: Genuine spawn failure releases descriptors and finalizes incomplete" started.
+◇ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" started.
+◇ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" started.
+◇ Test "Partial candidate: head/suffix returned and thrown progress, ambiguous head, repeated compaction failure" started.
+◇ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" started.
+◇ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" started.
+◇ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" started.
+◇ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" started.
+◇ Test "Test E: Case 6 - Real owned-fixture ancestor symlinks, final symlinks, existing-session rejection, and chunk policies" started.
+◇ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" started.
+◇ Test "Test B: Case 1 - First 600 / cap 500 / head 100 / tail 200 exact 300 retained bytes and honest never-written middle accounting" started.
+◇ Test "Ownership Rejection: Group-writable (0770), world-writable (0777), untrusted owner, allow-write ACE, inheritable allow ACE, untrusted ancestor, compliant deny-delete ACE" started.
+◇ Test "Storage Policy: Failed/aborted sessions abandon files without deletion; descriptors closed once; foreign files preserved" started.
+◇ Test "Local Volume Check: Non-local filesystem (e.g. NFS / SMB) fails closed with unsupportedFilesystem" started.
+◇ Test "A running client blocks a diagnostic session" started.
+◇ Test "First trigger explicitCaptureDeadlineReached at t=15s sets grace expiry to t=45s" started.
+◇ Test "Test D: Reproducing Cases 2 to 5 - Suffix 37-byte progress, ambiguous failure, single close attempt, preserved temp file, and targeted faults" started.
+◇ Test "Storage Admission: Budget enforcement, exact ledger release, distinct root keys, abandoned dir scan, concurrency limit, and scan entry cap" started.
+◇ Test "Partial candidate: metadata primary and cleanup failures stay separate; payload sync and close outcomes; no deletion" started.
+◇ Test "Registry rejects invalid maxGlobalAdmissions configuration" started.
+◇ Test "Gate 1: Event-driven end-to-end lifecycle from spawn to clean finalization and closure acks in both orders" started.
+◇ Test "Stale token release after readmission is rejected harmlessly and does not release new capture" started.
+◇ Test "Two stream errors during grace finalize incomplete immediately without waiting for timer expiry" started.
+◇ Test "No preset always proceeds, whatever the client or driver state" started.
+◇ Test "Late launcher exit observation updates launcher record without mutating sealed capture outcome" started.
+◇ Test "Child Verification: Substituted child owner, wrong mode, or allow ACL fails closed" started.
+◇ Test "A preset proceeds only with a supported driver and no running client" started.
+◇ Test "An unsupported driver blocks a diagnostic session" started.
+◇ Test "Time input safety: backward event time and overflow duration are safely rejected without wrapping" started.
+◇ Test "Canonical identity mapping treats aliases as the same bottle" started.
+◇ Test "The propagation note discloses the unverified route" started.
+◇ Test "Repeated beginQuit calls are idempotent and do not reset cohort or lose tokens" started.
+◇ Test "Regression A3: Late non-data events (cleanEOF at t > expiry) cannot bypass deadline or yield clean" started.
+◇ Test "Regression A2: Early grace timer event at t < expiry is ignored and does not shorten grace" started.
+◇ Test "Registry mints unique deterministic tokens from monotonic counter" started.
+◇ Test "Gate 4: Rejected negative inputs at t > expiry do not trigger due-expiry or mutate receipt" started.
+◇ Test "Gate 1: Read error followed by closure ack leaves healthy stream open until its own end" started.
+◇ Test "Regression A6: Counters saturate at UInt64.max instead of wrapping and hostile inputs are safely handled" started.
+◇ Test "Gate 1: Terminal finalizationFailed allows resource release and cohort drain once readers close" started.
+◇ Test "Exact deadline tie boundary: chunk at t==expiry before expiry event is accepted; chunk after expiry event is rejected" started.
+◇ Test "Gate 5: Pure metadata mapper preserves reducer-generated spawnError across requested, sealed, and failed phases" started.
+◇ Test "One stream read error + other clean EOF in both orders requests incomplete finalization once both end" started.
+◇ Test "Spawn failure immediately emits incomplete finalization with failure reason" started.
+◇ Test "beginQuit closes admissions and snapshots admitted tokens into a draining cohort" started.
+◇ Test "Gate 3: Floating conversion boundary safety and hostile duration values" started.
+◇ Test "Structured Bulk Writer Safe Regression 5: Primary write failure and cleanup failure are both preserved" started.
+◇ Test "Syscall seam: 64KiB byte quota yields and later pump resumes without data loss or reordering" started.
+◇ Test "Syscall seam: All-EINTR exhausts 32-operation quota and yields without terminal or hang" started.
+◇ Test "Gate 2: Central expiry must not overwrite pending, sealed or failed finalization on late events" started.
+◇ Test "Pure-Core Bridge: Symmetric EOF order - stdout first, then stderr last with peer write" started.
+◇ Test "Event recorder: Reaching capacity trips overflow flag without silent unbounded growth" started.
+◇ Test "First trigger quitRequest at t=10s sets grace expiry to t=40s" started.
+◇ Test "Late data payload arriving at t > expiry before delayed timer delivery triggers expiry and is discarded" started.
+◇ Test "Real pipe: Level-triggered DispatchSource resumption above 64KiB via structured nonblocking writer" started.
+◇ Test "Structured Bulk Writer Safe Regression 6: Prestart disposal preserves cleanup outcome and unactivated state" started.
+◇ Test "Metadata mapper preserves custom preset, winedebug values, and launcher command" started.
+◇ Test "Bounded off-owner cancellation enqueue: 50 concurrent cancel callers enqueue exactly one async block" started.
+◇ Test "First trigger rule: quit at t=10s sets expiry=40s; later explicit at 15s or 25s leaves 40s" started.
+◇ Test "Structured Bulk Writer Safe Regression 1: Injected zero-write and fatal errno fail cleanly and quiesce" started.
+◇ Test "Metadata record encodes and decodes losslessly via JSON" started.
+◇ Test "Registry enforces 1 reservation per bottle and max 2 global admissions" started.
+◇ Test "Structured Bulk Writer Safe Regression 3: Cancel-handler-owned state survives wrapper deallocation" started.
+◇ Test "Pure-Core Bridge: Negative seam test - close failure keeps stream unacknowledged in reducer" started.
+◇ Test "Atomic generation: 50 concurrent handle constructions produce 50 unique generations" started.
+◇ Test "Syscall seam: Race permutations settle first terminal outcome and close occurs once" started.
+◇ Test "Observer cancellation does not affect diagnostic capture state" started.
+◇ Test "Structured Bulk Writer Safe Regression 4: Timeout branch prevents premature downstream reader close" started.
+◇ Test "Syscall seam: Setup failure preserves both primary errno and cleanup close failure" started.
+◇ Test "Real pipe: Non-destructive flag inspection on rawFileDescriptor preserves initial flags and O_NONBLOCK" started.
+◇ Test "Real pipe: Cancellation requested from inside data callback does not deadlock" started.
+◇ Test "Duplicate external session IDs are rejected and cannot inflate count" started.
+◇ Test "Syscall seam: Close failure captures close error in acknowledgement without leaking kernel FD" started.
+◇ Test "Setup failure during quit releases token and drains cohort properly" started.
+◇ Test "Both clean EOFs before parent launcher exit requests clean finalization; parent wait completes independently" started.
+◇ Test "Pure-Core Bridge: Symmetric EOF order - stderr first, then stdout last with peer write" started.
+◇ Test "Syscall seam: EINTR then valid bytes then EAGAIN resumes without terminal callback" started.
+◇ Test "Real pipe: Explicit cancellation while writer is still alive reports cancelled and closes once" started.
+◇ Test "Structured Bulk Writer Safe Regression 2: Controlled abort ensures writer quiescence before reader cancel" started.
+◇ Test "Registry checks token counter exhaustion and rejects without state corruption" started.
+◇ Test "Closure and finalization acknowledgement seals terminal state and gates resource readiness" started.
+◇ Test "Real pipe: Two independent readers on shared queue allow healthy reader to coexist after peer EOF" started.
+◇ Test "Syscall seam: Fatal read error captures exact errno and terminates immediately" started.
+◇ Test "Real pipe: Known binary payload with embedded NUL and split UTF8 sequence preserves exact bytes" started.
+◇ Test "Metadata accounting maps queue, sink, and retention drops accurately with overflow flag and optional disk count" started.
+◇ Test "Real pipe: Reader and scratch buffer deallocate without retain cycle after close acknowledgement" started.
+◇ Test "Repeated beginQuit after partial drain preserves remaining cohort" started.
+◇ Test "Syscall seam: Setup failure closes transferred descriptor exactly once before throwing" started.
+◇ Test "Non-trigger events do not start or shorten grace" started.
+◇ Test "Mixed error + EOF during grace in both temporal orders finalize incomplete immediately" started.
+◇ Test "Repeated release of the same token is harmless and idempotent" started.
+◇ Test "Repeated quit triggers do not extend or reset expiry" started.
+◇ Test "Regression A5: Data chunk rejected outside open stream and late spawnSucceeded cannot reopen sealed capture" started.
+◇ Test "Both clean EOFs before any trigger request reader closure and clean finalization" started.
+◇ Test "Regression A4: Reader close acknowledgement does not erase stream readError and unsolicited ack is ignored" started.
+◇ Test "Regression A1: Repeated injected generator values across same-bottle release/readmit do not reuse token identity" started.
+◇ Test "Wrong token for a bottle cannot release another bottle's admission" started.
+◇ Test "Grace expiry emits close intents for ONLY remaining open readers" started.
+✔ Test "Gate 1 Seam: Teardown receipt success strictly requires timer cancellation acknowledgement" passed after 0.053 seconds.
+✔ Test "Gate 1 Seam: Lifecycle owner keeps observing until actual reap after cleanup requested" passed after 0.053 seconds.
+✔ Test "Gate 1 Seam: Failed signal and wait error cannot produce successful cleanup receipt" passed after 0.053 seconds.
+✔ Test "Gate 1 Seam: Serialized lifecycle owner guarantees signal is never issued after reap" passed after 0.053 seconds.
+✔ Test "Gate 4 Seam: Bridge start first reader failure cleans untransferred descriptor" passed after 0.053 seconds.
+✔ Test "Gate 4 Seam: Control pipe consuming read ownership cleans on early setup failure" passed after 0.053 seconds.
+✔ Test "Gate 4 Seam: Bridge start second reader failure cancels and awaits first reader" passed after 0.053 seconds.
+✔ Test "Test B: In-flight consumer hold fills budget and next enqueue drops whole chunk" passed after 0.053 seconds.
+✔ Test "Test E: Throwing consumer settles in-flight/queued payload and respects fail-closed mode" passed after 0.053 seconds.
+✔ Test "Test C: Tiny chunks entry cap, empty/oversized chunk rejection, configuration validation, and counter overflow" passed after 0.053 seconds.
+✔ Test "Case C: Genuine spawn failure releases descriptors and finalizes incomplete" passed after 0.053 seconds.
+✔ Test "Test A: Exact raw binary chunks on both streams with NUL and split UTF8" passed after 0.053 seconds.
+✔ Test "Test C: Configuration validation rejects negative, zero, overflow, and huge allocations" passed after 0.053 seconds.
+✔ Test "Test E: Case 6 - Real owned-fixture ancestor symlinks, final symlinks, existing-session rejection, and chunk policies" passed after 0.053 seconds.
+✔ Test "Case D: Controlled watchdog timeout cancels readers, awaits close, then terminates and reaps child" passed after 0.053 seconds.
+✔ Test "Gate 2 Ordering: Spawn event strictly precedes immediately buffered child data and EOF" passed after 0.053 seconds.
+✔ Test "Case B: Child closes stdout then emits complete stderr and exits nonzero status 7" passed after 0.059 seconds.
+✔ Test "Case A: Successful finite child produces >64KiB binary payloads on both streams and clean finalization" passed after 0.059 seconds.
+✔ Test "A running client blocks a diagnostic session" passed after 0.059 seconds.
+✔ Test "First trigger explicitCaptureDeadlineReached at t=15s sets grace expiry to t=45s" passed after 0.059 seconds.
+✔ Test "Local Volume Check: Non-local filesystem (e.g. NFS / SMB) fails closed with unsupportedFilesystem" passed after 0.059 seconds.
+✔ Test "Test B: Case 1 - First 600 / cap 500 / head 100 / tail 200 exact 300 retained bytes and honest never-written middle accounting" passed after 0.060 seconds.
+✔ Test "Test A: Real owned files raw roundtrip under cap with NUL, split UTF8, reopen, and idempotent seal" passed after 0.060 seconds.
+✔ Test "Registry rejects invalid maxGlobalAdmissions configuration" passed after 0.060 seconds.
+✔ Test "Stale token release after readmission is rejected harmlessly and does not release new capture" passed after 0.062 seconds.
+✔ Test "Two stream errors during grace finalize incomplete immediately without waiting for timer expiry" passed after 0.062 seconds.
+✔ Test "Gate 1: Event-driven end-to-end lifecycle from spawn to clean finalization and closure acks in both orders" passed after 0.062 seconds.
+✔ Test "No preset always proceeds, whatever the client or driver state" passed after 0.062 seconds.
+✔ Test "Late launcher exit observation updates launcher record without mutating sealed capture outcome" passed after 0.062 seconds.
+✔ Test "Child Verification: Substituted child owner, wrong mode, or allow ACL fails closed" passed after 0.062 seconds.
+✔ Test "An unsupported driver blocks a diagnostic session" passed after 0.062 seconds.
+✔ Test "A preset proceeds only with a supported driver and no running client" passed after 0.062 seconds.
+✔ Test "Time input safety: backward event time and overflow duration are safely rejected without wrapping" passed after 0.063 seconds.
+✔ Test "Canonical identity mapping treats aliases as the same bottle" passed after 0.063 seconds.
+✔ Test "Repeated beginQuit calls are idempotent and do not reset cohort or lose tokens" passed after 0.063 seconds.
+✔ Test "Regression A3: Late non-data events (cleanEOF at t > expiry) cannot bypass deadline or yield clean" passed after 0.063 seconds.
+✔ Test "Regression A2: Early grace timer event at t < expiry is ignored and does not shorten grace" passed after 0.063 seconds.
+✔ Test "The propagation note discloses the unverified route" passed after 0.063 seconds.
+✔ Test "Registry mints unique deterministic tokens from monotonic counter" passed after 0.063 seconds.
+✔ Test "Gate 4: Rejected negative inputs at t > expiry do not trigger due-expiry or mutate receipt" passed after 0.063 seconds.
+✔ Test "Regression A6: Counters saturate at UInt64.max instead of wrapping and hostile inputs are safely handled" passed after 0.062 seconds.
+✔ Test "Gate 1: Read error followed by closure ack leaves healthy stream open until its own end" passed after 0.063 seconds.
+✔ Test "Gate 1: Terminal finalizationFailed allows resource release and cohort drain once readers close" passed after 0.062 seconds.
+✔ Test "Gate 5: Pure metadata mapper preserves reducer-generated spawnError across requested, sealed, and failed phases" passed after 0.062 seconds.
+✔ Test "Exact deadline tie boundary: chunk at t==expiry before expiry event is accepted; chunk after expiry event is rejected" passed after 0.062 seconds.
+✔ Test "One stream read error + other clean EOF in both orders requests incomplete finalization once both end" passed after 0.062 seconds.
+✔ Test "Spawn failure immediately emits incomplete finalization with failure reason" passed after 0.062 seconds.
+✔ Test "beginQuit closes admissions and snapshots admitted tokens into a draining cohort" passed after 0.062 seconds.
+✔ Test "Gate 3: Floating conversion boundary safety and hostile duration values" passed after 0.061 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 5: Primary write failure and cleanup failure are both preserved" passed after 0.061 seconds.
+✔ Test "Syscall seam: 64KiB byte quota yields and later pump resumes without data loss or reordering" passed after 0.060 seconds.
+✔ Test "Syscall seam: All-EINTR exhausts 32-operation quota and yields without terminal or hang" passed after 0.060 seconds.
+✔ Test "Gate 2: Central expiry must not overwrite pending, sealed or failed finalization on late events" passed after 0.060 seconds.
+✔ Test "Pure-Core Bridge: Symmetric EOF order - stdout first, then stderr last with peer write" passed after 0.047 seconds.
+✔ Test "Event recorder: Reaching capacity trips overflow flag without silent unbounded growth" passed after 0.047 seconds.
+✔ Test "First trigger quitRequest at t=10s sets grace expiry to t=40s" passed after 0.047 seconds.
+✔ Test "Late data payload arriving at t > expiry before delayed timer delivery triggers expiry and is discarded" passed after 0.047 seconds.
+✔ Test "Real pipe: Level-triggered DispatchSource resumption above 64KiB via structured nonblocking writer" passed after 0.047 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 6: Prestart disposal preserves cleanup outcome and unactivated state" passed after 0.047 seconds.
+✔ Test "Metadata mapper preserves custom preset, winedebug values, and launcher command" passed after 0.047 seconds.
+✔ Test "Bounded off-owner cancellation enqueue: 50 concurrent cancel callers enqueue exactly one async block" passed after 0.047 seconds.
+✔ Test "First trigger rule: quit at t=10s sets expiry=40s; later explicit at 15s or 25s leaves 40s" passed after 0.047 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 1: Injected zero-write and fatal errno fail cleanly and quiesce" passed after 0.047 seconds.
+✔ Test "Metadata record encodes and decodes losslessly via JSON" passed after 0.047 seconds.
+✔ Test "Registry enforces 1 reservation per bottle and max 2 global admissions" passed after 0.047 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 3: Cancel-handler-owned state survives wrapper deallocation" passed after 0.047 seconds.
+✔ Test "Pure-Core Bridge: Negative seam test - close failure keeps stream unacknowledged in reducer" passed after 0.047 seconds.
+✔ Test "Atomic generation: 50 concurrent handle constructions produce 50 unique generations" passed after 0.024 seconds.
+✔ Test "Syscall seam: Race permutations settle first terminal outcome and close occurs once" passed after 0.024 seconds.
+✔ Test "Observer cancellation does not affect diagnostic capture state" passed after 0.024 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 4: Timeout branch prevents premature downstream reader close" passed after 0.024 seconds.
+✔ Test "Syscall seam: Setup failure preserves both primary errno and cleanup close failure" passed after 0.024 seconds.
+✔ Test "Real pipe: Non-destructive flag inspection on rawFileDescriptor preserves initial flags and O_NONBLOCK" passed after 0.024 seconds.
+✔ Test "Real pipe: Cancellation requested from inside data callback does not deadlock" passed after 0.024 seconds.
+✔ Test "Duplicate external session IDs are rejected and cannot inflate count" passed after 0.024 seconds.
+✔ Test "Syscall seam: Close failure captures close error in acknowledgement without leaking kernel FD" passed after 0.024 seconds.
+✔ Test "Setup failure during quit releases token and drains cohort properly" passed after 0.024 seconds.
+✔ Test "Both clean EOFs before parent launcher exit requests clean finalization; parent wait completes independently" passed after 0.024 seconds.
+✔ Test "Pure-Core Bridge: Symmetric EOF order - stderr first, then stdout last with peer write" passed after 0.024 seconds.
+✔ Test "Syscall seam: EINTR then valid bytes then EAGAIN resumes without terminal callback" passed after 0.024 seconds.
+✔ Test "Real pipe: Explicit cancellation while writer is still alive reports cancelled and closes once" passed after 0.024 seconds.
+✔ Test "Structured Bulk Writer Safe Regression 2: Controlled abort ensures writer quiescence before reader cancel" passed after 0.023 seconds.
+✔ Test "Registry checks token counter exhaustion and rejects without state corruption" passed after 0.011 seconds.
+✔ Test "Closure and finalization acknowledgement seals terminal state and gates resource readiness" passed after 0.011 seconds.
+✔ Test "Real pipe: Two independent readers on shared queue allow healthy reader to coexist after peer EOF" passed after 0.011 seconds.
+✔ Test "Syscall seam: Fatal read error captures exact errno and terminates immediately" passed after 0.011 seconds.
+✔ Test "Real pipe: Known binary payload with embedded NUL and split UTF8 sequence preserves exact bytes" passed after 0.011 seconds.
+✔ Test "Metadata accounting maps queue, sink, and retention drops accurately with overflow flag and optional disk count" passed after 0.011 seconds.
+✔ Test "Real pipe: Reader and scratch buffer deallocate without retain cycle after close acknowledgement" passed after 0.010 seconds.
+✔ Test "Repeated beginQuit after partial drain preserves remaining cohort" passed after 0.010 seconds.
+✔ Test "Syscall seam: Setup failure closes transferred descriptor exactly once before throwing" passed after 0.010 seconds.
+✔ Test "Non-trigger events do not start or shorten grace" passed after 0.010 seconds.
+✔ Test "Mixed error + EOF during grace in both temporal orders finalize incomplete immediately" passed after 0.010 seconds.
+✔ Test "Repeated release of the same token is harmless and idempotent" passed after 0.010 seconds.
+✔ Test "Repeated quit triggers do not extend or reset expiry" passed after 0.010 seconds.
+✔ Test "Regression A5: Data chunk rejected outside open stream and late spawnSucceeded cannot reopen sealed capture" passed after 0.010 seconds.
+✔ Test "Both clean EOFs before any trigger request reader closure and clean finalization" passed after 0.010 seconds.
+✔ Test "Regression A4: Reader close acknowledgement does not erase stream readError and unsolicited ack is ignored" passed after 0.010 seconds.
+✔ Test "Regression A1: Repeated injected generator values across same-bottle release/readmit do not reuse token identity" passed after 0.010 seconds.
+✔ Test "Wrong token for a bottle cannot release another bottle's admission" passed after 0.010 seconds.
+✔ Test "Grace expiry emits close intents for ONLY remaining open readers" passed after 0.010 seconds.
+✔ Test "Test F: Bounded finish registration, held consumer barrier, duplicate finish, and wrapper deallocates" passed after 0.063 seconds.
+✔ Suite "Diagnostic subprocess capture: controlled subprocess, verified readers, reducer bridge, and in-memory metadata" passed after 0.064 seconds.
+✔ Suite "Steam session diagnostics: launch gate" passed after 0.064 seconds.
+✔ Suite "Diagnostic pipe reader: real descriptor ownership, nonblocking discipline, and pure core bridge" passed after 0.064 seconds.
+✔ Suite "Diagnostic capture pure core: admission registry, grace reducer, and metadata" passed after 0.064 seconds.
+✔ Test "Regression: Blocking-wait / terminal-publication overlap and retry without deadlock" passed after 0.064 seconds.
+✔ Test "Test D: Producer vs idle drain lost-wakeup prevention, controlled idle boundary, and concurrent producers" passed after 0.064 seconds.
+✔ Suite "Diagnostic ingress: bounded raw-byte handoff, off-reader scheduling, and immutable receipts" passed after 0.064 seconds.
+✔ Test "Partial candidate: head/suffix returned and thrown progress, ambiguous head, repeated compaction failure" passed after 0.073 seconds.
+✔ Test "Storage Policy: Failed/aborted sessions abandon files without deletion; descriptors closed once; foreign files preserved" passed after 0.078 seconds.
+✔ Test "Ownership Rejection: Group-writable (0770), world-writable (0777), untrusted owner, allow-write ACE, inheritable allow ACE, untrusted ancestor, compliant deny-delete ACE" passed after 0.095 seconds.
+✔ Test "Transient settings carry only the preset, and none are built for nil" passed after 0.120 seconds.
+✔ Test "A running client refuses a diagnostic session before any start" passed after 0.126 seconds.
+✔ Test "A driver without diagnostics support refuses the session" passed after 0.126 seconds.
+✔ Test "A launch with a different preset does not reuse a client start made without it" passed after 0.132 seconds.
+✔ Test "Storage Admission: Budget enforcement, exact ledger release, distinct root keys, abandoned dir scan, concurrency limit, and scan entry cap" passed after 0.136 seconds.
+✔ Test "Partial candidate: metadata primary and cleanup failures stay separate; payload sync and close outcomes; no deletion" passed after 0.136 seconds.
+✔ Test "No preset keeps the legacy flow" passed after 0.137 seconds.
+✔ Test "The preset reaches startClient and launchGame through the driver protocol" passed after 0.137 seconds.
+✔ Test "A preset changed mid-launch does not split the session" passed after 0.137 seconds.
+✔ Suite "Steam session diagnostics: orchestrator route" passed after 0.138 seconds.
+✔ Test "Test D: Reproducing Cases 2 to 5 - Suffix 37-byte progress, ambiguous failure, single close attempt, preserved temp file, and targeted faults" passed after 0.137 seconds.
+✔ Suite "Diagnostic disk sink: bounded raw byte storage, retention compaction, and persistence receipt" passed after 0.138 seconds.
+✔ Test run with 117 tests in 7 suites passed after 0.138 seconds.

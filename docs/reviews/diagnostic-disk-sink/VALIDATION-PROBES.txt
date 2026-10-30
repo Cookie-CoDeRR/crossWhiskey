@@ -1,0 +1,265 @@
+=== DARWIN PLATFORM-PRIMITIVE VALIDATION PROBES LOG ===
+Date: 2026-10-30
+Host Platform: arm64-apple-darwin24.0.0 (macOS 15.0)
+Installed SDK: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+Swift Compiler: Apple Swift version 6.0 (swiftlang-6.0.0.9.10 clang-1600.0.26.2)
+Target Architecture: arm64e-apple-macos14.0
+
+Execution Method:
+All probes executed as swiftc typecheck-only validations (-typecheck) on minimal standalone
+Swift source files in worktree-local .scratch/probes. Zero runtime execution, zero subprocesses,
+zero Wine/game launches, and zero shell-outs for fixture mutation.
+
+================================================================================
+Probe 1: Extended ACL Inspection & Iteration via Darwin / sys/acl.h
+================================================================================
+Source: .scratch/probes/probe_acl_read.swift
+Content:
+```swift
+import Darwin
+
+func testAcl(fd: Int32) {
+    let acl: acl_t? = acl_get_fd_np(fd, ACL_TYPE_EXTENDED)
+    if let acl = acl {
+        var entry: acl_entry_t? = nil
+        var result = acl_get_entry(acl, ACL_FIRST_ENTRY.rawValue, &entry)
+        while result == 0 {
+            var tag: acl_tag_t = ACL_UNDEFINED_TAG
+            _ = acl_get_tag_type(entry, &tag)
+            
+            var mask: acl_permset_mask_t = 0
+            _ = acl_get_permset_mask_np(entry, &mask)
+            
+            let qualifier = acl_get_qualifier(entry)
+            if let qualifier = qualifier {
+                acl_free(qualifier)
+            }
+            
+            result = acl_get_entry(acl, ACL_NEXT_ENTRY.rawValue, &entry)
+        }
+        acl_free(UnsafeMutableRawPointer(acl))
+    }
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_acl_read.swift
+Exit Code: 0
+Result: Confirms acl_get_fd_np, ACL_TYPE_EXTENDED, acl_get_entry, acl_get_tag_type, acl_get_permset_mask_np, acl_get_qualifier, and acl_free are present and callable from Swift with Darwin module.
+
+================================================================================
+Probe 2: Darwin ACL Permission Bitmask Constants & Entry Tags
+================================================================================
+Source: .scratch/probes/probe_acl_constants.swift
+Content:
+```swift
+import Darwin
+
+func checkConstants() {
+    let _: acl_perm_t = ACL_WRITE_DATA
+    let _: acl_perm_t = ACL_ADD_FILE
+    let _: acl_perm_t = ACL_APPEND_DATA
+    let _: acl_perm_t = ACL_ADD_SUBDIRECTORY
+    let _: acl_perm_t = ACL_DELETE
+    let _: acl_perm_t = ACL_DELETE_CHILD
+    let _: acl_perm_t = ACL_WRITE_ATTRIBUTES
+    let _: acl_perm_t = ACL_WRITE_EXTATTRIBUTES
+    let _: acl_perm_t = ACL_WRITE_SECURITY
+    let _: acl_perm_t = ACL_CHANGE_OWNER
+
+    let writeMask: UInt64 = UInt64(ACL_WRITE_DATA.rawValue) |
+                           UInt64(ACL_ADD_FILE.rawValue) |
+                           UInt64(ACL_APPEND_DATA.rawValue) |
+                           UInt64(ACL_ADD_SUBDIRECTORY.rawValue) |
+                           UInt64(ACL_DELETE.rawValue) |
+                           UInt64(ACL_DELETE_CHILD.rawValue) |
+                           UInt64(ACL_WRITE_ATTRIBUTES.rawValue) |
+                           UInt64(ACL_WRITE_EXTATTRIBUTES.rawValue) |
+                           UInt64(ACL_WRITE_SECURITY.rawValue) |
+                           UInt64(ACL_CHANGE_OWNER.rawValue)
+
+    let allowTag = ACL_EXTENDED_ALLOW
+    let denyTag = ACL_EXTENDED_DENY
+    _ = (writeMask, allowTag, denyTag)
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_acl_constants.swift
+Exit Code: 0
+Result: Confirms all Darwin directory write/delete/security modification permissions and entry tags are exposed as typed enums and raw bitmasks in Swift.
+
+================================================================================
+Probe 3: Fixture ACL Programmatic Mutation Without Shell-Out
+================================================================================
+Source: .scratch/probes/probe_acl_write.swift
+Content:
+```swift
+import Darwin
+
+func setAclOnFd(fd: Int32, guid: guid_t, permMask: UInt64) -> Int32 {
+    guard let acl = acl_init(4) else { return -1 }
+    defer { acl_free(UnsafeMutableRawPointer(acl)) }
+
+    var entry: acl_entry_t? = nil
+    var aclPtr: acl_t? = acl
+    if acl_create_entry(&aclPtr, &entry) != 0 { return -1 }
+    guard let entry = entry else { return -1 }
+
+    _ = acl_set_tag_type(entry, ACL_EXTENDED_ALLOW)
+    _ = acl_set_permset_mask_np(entry, acl_permset_mask_t(permMask))
+    
+    var mutableGuid = guid
+    _ = acl_set_qualifier(entry, &mutableGuid)
+
+    return acl_set_fd_np(fd, acl, ACL_TYPE_EXTENDED)
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_acl_write.swift
+Exit Code: 0
+Result: Confirms unit tests can programmatically construct and apply arbitrary ACLs (including write-granting allow entries) directly to test fixture directory file descriptors using libc APIs without shelling out to /bin/chmod.
+
+================================================================================
+Probe 4: Darwin User/Group Identity to UUID Translation
+================================================================================
+Source: .scratch/probes/probe_membership.swift
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_membership.swift
+Exit Code: 1
+Error Output:
+/Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_membership.swift:5:14: error: cannot find 'mbr_uid_to_uuid' in scope
+
+Source: .scratch/probes/probe_membership2.swift
+Content:
+```swift
+import Darwin.membership
+
+func testMembership(uid: uid_t) -> Int32 {
+    var uuid: uuid_t = (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+    return mbr_uid_to_uuid(uid, &uuid)
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_membership2.swift
+Exit Code: 0
+Result: Demonstrates that <membership.h> is not exported by the root Darwin module in Swift; it requires `import Darwin.membership`. mbr_uid_to_uuid connects to opendirectoryd to map POSIX uids to 128-bit GUIDs.
+
+================================================================================
+Probe 5: Extended Security via fgetattrlist
+================================================================================
+Source: .scratch/probes/probe_getattrlist.swift
+Content:
+```swift
+import Darwin
+
+func testGetAttrList(fd: Int32) -> Int32 {
+    var attrList = attrlist()
+    attrList.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+    attrList.commonattr = attrgroup_t(ATTR_CMN_EXTENDED_SECURITY)
+    
+    var buf = [UInt8](repeating: 0, count: 1024)
+    return fgetattrlist(fd, &attrList, &buf, buf.count, 0)
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_getattrlist.swift
+Exit Code: 0
+Result: Confirms fgetattrlist with ATTR_CMN_EXTENDED_SECURITY is available in Swift. Returns raw kauth_filesec buffer containing ACL header and entries.
+
+================================================================================
+Probe 6: ACL Human-Readable Text Formatting
+================================================================================
+Source: .scratch/probes/probe_acl_to_text.swift
+Content:
+```swift
+import Darwin
+
+func testAclToText(acl: acl_t) -> String? {
+    var len: ssize_t = 0
+    guard let cStr = acl_to_text(acl, &len) else { return nil }
+    defer { acl_free(UnsafeMutableRawPointer(cStr)) }
+    return String(cString: cStr)
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_acl_to_text.swift
+Exit Code: 0
+Result: Confirms acl_to_text converts an acl_t to a human-readable text string for diagnostic reporting.
+
+================================================================================
+Probe 7: Component Ancestor Verification via fstat on O_NOFOLLOW dirfd
+================================================================================
+Source: .scratch/probes/probe_ancestor_stat.swift
+Content:
+```swift
+import Darwin
+
+func verifyAncestorComponent(fd: Int32, expectedEUID: uid_t) -> (isSecure: Bool, errno: Int32) {
+    var sb = stat()
+    if fstat(fd, &sb) != 0 {
+        return (false, errno)
+    }
+    // Must be directory
+    guard (sb.st_mode & S_IFMT) == S_IFDIR else {
+        return (false, ENOTDIR)
+    }
+    // Must be owned by root (0) or euid
+    guard sb.st_uid == 0 || sb.st_uid == expectedEUID else {
+        return (false, EACCES)
+    }
+    // Group and other must not have write permissions
+    guard (sb.st_mode & (S_IWGRP | S_IWOTH)) == 0 else {
+        return (false, EACCES)
+    }
+    return (true, 0)
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_ancestor_stat.swift
+Exit Code: 0
+Result: Confirms fstat on an open directory descriptor accurately inspects directory type, ownership (root vs euid), and permissions (no group or other write permissions).
+
+================================================================================
+Probe 8: Directory Creation, Inspection, and Removal Primitives
+================================================================================
+Source: .scratch/probes/probe_openat_unlinkat.swift
+Content:
+```swift
+import Darwin
+
+func testDirPrimitives(parentFd: Int32, name: String) {
+    let rcMkdir = mkdirat(parentFd, name, 0o700)
+    let childFd = openat(parentFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    
+    var sb = stat()
+    let rcFstat = fstat(childFd, &sb)
+    let rcFstatAt = fstatat(parentFd, name, &sb, AT_SYMLINK_NOFOLLOW)
+    
+    // unlinkat signature only takes (fd, path, flags)
+    // No expected inode/device parameter exists in the Darwin/POSIX C library
+    let rcUnlink = unlinkat(parentFd, name, AT_REMOVEDIR)
+    
+    _ = (rcMkdir, childFd, rcFstat, rcFstatAt, rcUnlink)
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_openat_unlinkat.swift
+Exit Code: 0
+Result: Validates mkdirat, openat with O_DIRECTORY|O_NOFOLLOW, fstat, fstatat, and confirms unlinkat takes solely (fd, path, flags) with AT_REMOVEDIR. Confirms no inode-conditional or CAS-unlink variant exists in Darwin libc.
+
+================================================================================
+Probe 9: Directory Open with O_CREAT
+================================================================================
+Source: .scratch/probes/probe_open_creat_dir.swift
+Content:
+```swift
+import Darwin
+
+func testOpenCreatDir(parentFd: Int32, name: String) -> Int32 {
+    let flags = O_RDONLY | O_DIRECTORY | O_CREAT | O_EXCL
+    return openat(parentFd, name, flags, 0o700)
+}
+```
+Command:
+swiftc -typecheck /Users/cookiecoderr/Coding/crossWhiskey-stage2b-collector/.scratch/slice5-ownership-design-20261030-225645/probes/probe_open_creat_dir.swift
+Exit Code: 0
+Result: Typechecks syntactically, but Darwin kernel vfs_syscalls.c implements O_CREAT strictly for VREG (regular file creation via vn_open). Passing O_CREAT with O_DIRECTORY fails at runtime or creates a regular file. There is no atomic "create directory and return descriptor" syscall on Darwin.

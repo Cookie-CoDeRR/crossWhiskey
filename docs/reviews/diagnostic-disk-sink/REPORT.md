@@ -9,14 +9,15 @@
 ## 1. Settled Actor Boundary & Storage Architecture
 
 ### 1.1 Actor Boundary Decisions
-- **Excluded Actors**: Other local macOS user accounts and unprivileged daemons are excluded by DAC permissions (`0o700` child creation, non-group/world-writable ancestor verification) and Darwin extended ACL inspection (rejecting any write-granting `ACL_EXTENDED_ALLOW` entries along the ancestor chain and reject child creation under inherited write ACLs).
+- **Excluded Actors**: Other local macOS user accounts and unprivileged daemons are excluded by DAC permissions (`0o700` child creation, non-group/world-writable ancestor verification) and Darwin extended ACL inspection (rejecting any write-granting `ACL_EXTENDED_ALLOW` entries along the ancestor chain and rejecting child creation under inherited write ACLs).
 - **Trusted Actors**: Programs executing under the same macOS login identity—including Wine, Steam, and Windows game binaries—share the same user credentials (EUID) and are treated as trusted. No defense against malicious actors sharing the same login session is claimed or implemented.
 - **Trusted Computing Base (TCB)**: macOS Kernel, system daemons, and `root` (`uid 0`) constitute the TCB.
 - **Volume Boundary**: Root directories must reside on a local Darwin filesystem verified via `fstatfs` (`MNT_LOCAL`). Remote, network, or pseudo filesystems (such as NFS, SMB, or synthetic mounts lacking `MNT_LOCAL`) fail closed.
 
 ### 1.2 Storage Direction & Abandonment Policy
-- **Bounded Admission**: Storage admissions are tracked cooperatives through an in-process, process-wide ledger (`DiagnosticDiskSinkStorageLedger`) keyed by root directory `(dev, ino)`.
+- **Bounded Admission**: Storage admissions are tracked cooperatively through an in-process, process-wide ledger (`DiagnosticDiskSinkStorageLedger`) keyed by root directory `(dev, ino)`.
 - **Soft Admission Bounds**: Prospective storage demands (`initialScannedUsage + liveReservations + sessionReservation`) are checked against `maxStorageBudgetPerRoot`. If exceeded, admission fails closed with `storageBudgetExceeded`.
+- **Fail-Closed Directory Scanning**: Directory usage scanning fully accounts usage or throws. Truncation at entry caps (`maxRootScanEntries` at root or 64 entries in a session child), deeper-than-accounted nesting, readdir/fstatat errors, unreadable descriptors, accounting overflows, or closedir failures cause the scan to throw (`storageScanIncomplete` or `ioError`). This rejects admission at setup time rather than undercounting storage usage.
 - **No Automatic Deletion**: Under the accepted storage direction, the component never removes its own session directories or temporary files. When session setup fails, or when a session is aborted, open file descriptors are closed once and the directory and its existing contents are abandoned on disk and reported in the terminal persistence receipt. Reclamation of abandoned sessions is delegated to caller lifecycle management.
 - **Foreign Object Protection**: Pre-existing files, alien sidecars, and foreign directory entries are never overwritten, unlinked, or adopted.
 
@@ -32,11 +33,11 @@ A hardware-grounded validation probe was compiled and executed directly against 
 [Probe R1] acl_get_fd_np on directory with no ACL:
   Result: acl == nil, errno == 2 (ENOENT) -> Confirmed: absence of ACL returns nil with ENOENT.
 [Probe R2] Ancestor ACL inspection on standard macOS paths:
-  Path: / (root) -> ACL: nil (ENOENT), 0 allow ACEs (PASS)
+  Path: / (system root) -> ACL: nil (ENOENT), 0 allow ACEs (PASS)
   Path: /Users -> ACL: present (1 entry, deny delete), 0 allow-write ACEs (PASS)
-  Path: /Users/cookiecoderr -> ACL: nil (ENOENT), 0 allow ACEs (PASS)
-  Path: /Users/cookiecoderr/Library -> ACL: present (deny delete), 0 allow-write ACEs (PASS)
-  Path: /Users/cookiecoderr/Desktop -> ACL: nil (ENOENT), 0 allow ACEs (PASS)
+  Path: <home> -> ACL: nil (ENOENT), 0 allow ACEs (PASS)
+  Path: <home>/Library -> ACL: present (deny delete), 0 allow-write ACEs (PASS)
+  Path: <home>/Desktop -> ACL: nil (ENOENT), 0 allow ACEs (PASS)
 [Probe R3] Inherited ACL verification:
   Parent directory provisioned with inheritable allow-write ACE.
   Child created via mkdirat(mode: 0700).
@@ -61,9 +62,11 @@ A hardware-grounded validation probe was compiled and executed directly against 
 ### 3.1 Files Modified in Bounded Scope
 1. `WhiskyKit/Sources/WhiskyKit/Steam/DiagnosticDiskSink.swift`
    - Added component-relative ancestor traversal anchored at `/` (`S_ISDIR`, `st_uid == 0`).
+   - First-walk consistency: "/" verification failure records cleanup via `recordCleanup` and throws `setupFailed(primary:cleanupFailure:)`.
    - Traversal steps use `openat(O_RDONLY | O_DIRECTORY | O_NOFOLLOW)` and verify `st_uid in [0, euid]`, `(st_mode & 0o022) == 0`, and extended ACL entries.
    - Enforced `fstatfs` volume locality check requiring `MNT_LOCAL`.
-   - Integrated cooperative process-wide storage admission ledger (`DiagnosticDiskSinkStorageLedger`) with directory usage scanning up to `maxRootScanEntries`.
+   - Added fail-closed directory usage scanning in `scanDirectoryUsage`: throws `DiagnosticDiskSinkError.storageScanIncomplete(reason:)` on entry cap excess (`maxRootScanEntries` at root, 64 entries in child), on deeper nesting, on accounting overflow, or on readdir/fstatat/closedir errors, ensuring admission rejects rather than undercounting.
+   - Integrated cooperative process-wide storage admission ledger (`DiagnosticDiskSinkStorageLedger`).
    - Child directory created exclusively via `mkdirat(..., 0o700)` and verified on its own descriptor before use.
    - Implemented abandonment policy: removed all `unlinkAt` / `removeDirectoryAt` calls for owned resources; failed/aborted sessions leave files intact on disk; descriptors are disarmed and closed once.
 2. `WhiskyKit/Tests/WhiskyKitTests/DiagnosticDiskSinkTests.swift`
@@ -72,6 +75,7 @@ A hardware-grounded validation probe was compiled and executed directly against 
    - Added test coverage for Darwin extended ACL allow-write rejection and deny-delete acceptance.
    - Added child descriptor verification failure tests (mismatched owner, wrong mode bits, inherited allow ACL).
    - Added storage ledger admission tests (budget exceeded, once-only reservation release across init failure, finish, abort, and deinit, distinct root keying, abandoned usage accounting, and concurrency limit).
+   - Added 7 new test rows for fail-closed scanning: root scan cap overflow fails closed, exactly-at-cap root count succeeds, session child with 64 entries succeeds, session child with 65 entries fails closed, nested directory deeper than accounted layout fails closed, injected incomplete scan throws and rejects admission, and injected scan read error rejects admission.
    - Added non-local filesystem rejection tests.
    - Added no-deletion storage policy tests verifying owned temp and payload files are preserved on disk without unlinking.
 
@@ -95,37 +99,41 @@ All 7 frozen foundation files remain byte-identical:
 
 ## 5. Implementation Files & Artifact Hashes
 
-- **Branch**: `review/diagnostic-disk-sink-ownership-impl-20261030-234540`
-- **Review Base Commit**: `159fcc90b2e998e5dae257784b9b45d3dd5da3b0` (sole parent `1c94bb3c1faf58e000f422504d7b69ebf0652d4c`)
-- **Five-Path Allowlist Hashes**:
-  - `WhiskyKit/Sources/WhiskyKit/Steam/DiagnosticDiskSink.swift`: `e3c93ab78271e7edd05d697ee57a4e3987e43634922b5fb531421a89f4a139fb`
-  - `WhiskyKit/Tests/WhiskyKitTests/DiagnosticDiskSinkTests.swift`: `06f9399c9e6948555e68b69dcdc5de083983d1c4e35689c24eb02891fe82fdcd`
-  - `docs/reviews/diagnostic-disk-sink/implementation.patch`: (generated diff against base `159fcc90b2e998e5dae257784b9b45d3dd5da3b0`)
-  - `docs/reviews/diagnostic-disk-sink/TEST-RESULTS.txt`: (test execution logs across all diagnostic suites)
+- **Branch**: `review/diagnostic-disk-sink-ownership-fix1-20261031-002130`
+- **Review Base Commit**: `144eb84e1b0d55bb504dee2002adec5d9da766d4`
+- **Candidate Post-Apply Hashes v2**:
+  - `WhiskyKit/Sources/WhiskyKit/Steam/DiagnosticDiskSink.swift`: `68121083f80b4e2c78d1c9460e55541aa687fa9e205eb45dc5683fa5fc16574a`
+  - `WhiskyKit/Tests/WhiskyKitTests/DiagnosticDiskSinkTests.swift`: `0cac06e00057839ac61ba89d9b1ff1197cbb14189fe619b90ec5fed0f89e6561`
+- **Final Post-Apply Hashes (Zero Post-Apply Modifications Needed)**:
+  - `WhiskyKit/Sources/WhiskyKit/Steam/DiagnosticDiskSink.swift`: `68121083f80b4e2c78d1c9460e55541aa687fa9e205eb45dc5683fa5fc16574a`
+  - `WhiskyKit/Tests/WhiskyKitTests/DiagnosticDiskSinkTests.swift`: `0cac06e00057839ac61ba89d9b1ff1197cbb14189fe619b90ec5fed0f89e6561`
+  - `docs/reviews/diagnostic-disk-sink/implementation.patch`: (literal two-Swift-file diff against base `144eb84e1b0d55bb504dee2002adec5d9da766d4`)
+  - `docs/reviews/diagnostic-disk-sink/TEST-RESULTS.txt`: (test execution logs across the 4 authorized suites)
   - `docs/reviews/diagnostic-disk-sink/REPORT.md`: (this document)
 
 ---
 
 ## 6. Test Suite Verification Summary
 
-Executed using worktree-local caches with zero network access and isolated worktree fixtures:
-- `DiagnosticDiskSinkTests`: 12/12 passed (0.138s)
-- `DiagnosticIngressTests`: 7/7 passed (0.064s)
+Current run executes strictly the 4 authorized suites (100 tests total, 0 failures):
+- `DiagnosticDiskSinkTests`: 19/19 passed (0.143s)
+- `DiagnosticIngressTests`: 7/7 passed (0.060s)
 - `DiagnosticCaptureCoreTests`: 47/47 passed (0.001s)
 - `DiagnosticPipeReaderTests`: 27/27 passed (0.005s)
-- `DiagnosticSubprocessCaptureTests`: 12/12 passed (0.011s)
-- `SteamSessionDiagnosticsTests` (Launch Gate & Orchestrator): 12/12 passed (0.151s)
-- **Total Diagnostic Capture Suites**: 117 passed, 0 failed.
+- **Total Authorized Suites**: 100 passed, 0 failed.
+
+Prior-run historical context (inclusive of boundary deviation):
+In the prior run on commit `144eb84e`, 117 tests across 7 suites passed (including `DiagnosticSubprocessCaptureTests` and two `SteamSessionDiagnosticsTests` suites: launch gate and orchestrator). As noted in `TEST-RESULTS.txt`, including those extra suites was a boundary deviation; that prior total is recorded as historical context and not as closure evidence for this component step.
 
 ---
 
 ## 7. Residual Security Limitations
 
-The following residual security limitations are documented and accepted under the current scope:
+The following residual security limitations are documented under the approved boundary; residuals are not individually owner-approved:
 
 1. **Residual 1 (Same-Login Actor Perimeter)**: Hostile same-login processes can observe, corrupt, substitute, or delete session directories and their payload files. Wine games and all processes sharing the user's macOS login session are within the trust perimeter, not defended against by DAC or ACL enforcement.
-2. **Residual 2 (Soft Storage Admission Bounds)**: Bounded admission is soft, cooperative within the process, and best-effort across multiple processes; concurrent writers under the same user account or concurrent disk sink instances can exceed `maxStorageBudgetPerRoot` between scans.
+2. **Residual 2 (Cross-Process Storage Admission Bounds)**: Bounded admission is soft, cooperative within the process, and best-effort across multiple processes: in-process concurrent sinks cannot exceed the budget because `reserve()` performs check-and-add atomically under the ledger lock; the residual is limited to separately launched app instances or concurrent writers under the same user login (trusted actors, cooperative accounting), which may change storage usage between scans.
 3. **Residual 3 (Sidecar Pre-Publication Semantics)**: Pre-publication sidecars capture state before rename and before final directory sync; failures during the final publication step leave unsealed staging files on disk without updating the on-disk sidecar.
 4. **Residual 4 (Abandonment Disk Accumulation)**: Abandonment policy leaves unsealed temp files and failed session directories in place without automated pruning; disk space reclamation requires caller-managed or external lifecycle intervention.
-5. **Residual 5 (Directory Scan Cap Bounds)**: Directory scanning inspects up to `maxRootScanEntries` entries; unindexed or deep directory hierarchies beyond this bound are not fully accounted for in storage admission checks.
+5. **Residual 5 (Directory Scan Fail-Closed Contract & Observation Bounds)**: A completed directory scan reflects root usage at observation time under the cooperative same-login actor boundary; trusted concurrent writers may change usage afterward. Scans that exceed entry bounds (`maxRootScanEntries` at root, or 64 entries in a session child), contain deeper-than-accounted nesting, hit unreadable entries, or overflow accounting fail closed and admission is rejected rather than undercounted.
 6. **Residual 6 (Local Filesystem Semantics)**: Volume locality checks rely on Darwin `statfs` `MNT_LOCAL`; filesystems reporting `MNT_LOCAL` but exhibiting non-local semantics or unusual locking behavior are not specifically defended against.

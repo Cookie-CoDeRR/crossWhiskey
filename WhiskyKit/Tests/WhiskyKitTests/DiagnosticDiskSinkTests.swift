@@ -1195,6 +1195,150 @@ struct DiagnosticDiskSinkTests {
         #expect(scannedMaxEntries == 42)
     }
 
+    @Test("Storage admission fails closed when root entry count exceeds maxRootScanEntries")
+    func testStorageAdmissionScanCapFailsClosed() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "capfail-root")
+        defer { Self.cleanupFixtureDirectory(root) }
+        let sessionName = "capfail-session"
+        _ = FileManager.default.createFile(atPath: root.appendingPathComponent("a.bin").path, contents: Data(repeating: 0x41, count: 64))
+        _ = FileManager.default.createFile(atPath: root.appendingPathComponent("b.bin").path, contents: Data(repeating: 0x42, count: 64))
+
+        let tinyCap = try DiagnosticDiskSinkConfiguration(maxRootScanEntries: 1)
+        do {
+            _ = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: sessionName, configuration: tinyCap)
+            Issue.record("Expected scan to fail closed on entry-count cap")
+        } catch let DiagnosticDiskSinkError.setupFailed(primary, _) {
+            guard case .storageScanIncomplete = primary else {
+                Issue.record("Expected storageScanIncomplete as primary error, got \(primary)")
+                return
+            }
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(sessionName).path))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test("Storage admission accepts exactly-at-cap root entry count")
+    func testStorageAdmissionExactlyAtCapSucceeds() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "atcap-root")
+        defer { Self.cleanupFixtureDirectory(root) }
+        _ = FileManager.default.createFile(atPath: root.appendingPathComponent("a.bin").path, contents: Data(repeating: 0x41, count: 64))
+        _ = FileManager.default.createFile(atPath: root.appendingPathComponent("b.bin").path, contents: Data(repeating: 0x42, count: 64))
+
+        let cap = try DiagnosticDiskSinkConfiguration(maxRootScanEntries: 2)
+        let sink = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "atcap-session", configuration: cap)
+        _ = sink.abort()
+    }
+
+    @Test("Storage admission accepts session child with exactly 64 accounted entries")
+    func testStorageAdmissionChildExactlyAtBoundarySucceeds() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "child64-root")
+        defer { Self.cleanupFixtureDirectory(root) }
+        let abandoned = root.appendingPathComponent("abandoned-session")
+        try FileManager.default.createDirectory(at: abandoned, withIntermediateDirectories: false)
+        for i in 0..<64 {
+            _ = FileManager.default.createFile(atPath: abandoned.appendingPathComponent("f\(i).bin").path, contents: Data(repeating: 0x43, count: 8))
+        }
+
+        let sink = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: "child64-session")
+        _ = sink.abort()
+    }
+
+    @Test("Storage admission fails closed when session child exceeds 64 accounted entries")
+    func testStorageAdmissionChildBoundaryExceededFailsClosed() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "child65-root")
+        defer { Self.cleanupFixtureDirectory(root) }
+        let sessionName = "child65-session"
+        let abandoned = root.appendingPathComponent("abandoned-session")
+        try FileManager.default.createDirectory(at: abandoned, withIntermediateDirectories: false)
+        for i in 0..<65 {
+            _ = FileManager.default.createFile(atPath: abandoned.appendingPathComponent("f\(i).bin").path, contents: Data(repeating: 0x44, count: 8))
+        }
+
+        do {
+            _ = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: sessionName)
+            Issue.record("Expected scan to fail closed on child entry boundary")
+        } catch let DiagnosticDiskSinkError.setupFailed(primary, _) {
+            guard case .storageScanIncomplete = primary else {
+                Issue.record("Expected storageScanIncomplete as primary error, got \(primary)")
+                return
+            }
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(sessionName).path))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test("Storage admission fails closed on nested directory deeper than accounted layout")
+    func testStorageAdmissionNestedDirectoryFailsClosed() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "nested-root")
+        defer { Self.cleanupFixtureDirectory(root) }
+        let sessionName = "nestedfail-session"
+        let abandoned = root.appendingPathComponent("abandoned-session")
+        try FileManager.default.createDirectory(at: abandoned.appendingPathComponent("nested"), withIntermediateDirectories: true)
+
+        do {
+            _ = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: sessionName)
+            Issue.record("Expected scan to fail closed on nested directory")
+        } catch let DiagnosticDiskSinkError.setupFailed(primary, _) {
+            guard case .storageScanIncomplete = primary else {
+                Issue.record("Expected storageScanIncomplete as primary error, got \(primary)")
+                return
+            }
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(sessionName).path))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test("Storage admission rejects injected incomplete scan")
+    func testStorageAdmissionRejectsIncompleteScanResult() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "incomplete-root")
+        defer { Self.cleanupFixtureDirectory(root) }
+        let sessionName = "incomplete-session"
+        let scanAdapter = MockFaultInjectingFileAdapter()
+        scanAdapter.scanUsageHandler = { _, _ in
+            throw DiagnosticDiskSinkError.storageScanIncomplete(reason: "injected truncation")
+        }
+
+        do {
+            _ = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: sessionName, fileAdapter: scanAdapter)
+            Issue.record("Expected admission to reject an incomplete scan")
+        } catch let DiagnosticDiskSinkError.setupFailed(primary, _) {
+            guard case .storageScanIncomplete = primary else {
+                Issue.record("Expected storageScanIncomplete as primary error, got \(primary)")
+                return
+            }
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(sessionName).path))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test("Storage admission rejects injected scan read error")
+    func testStorageAdmissionRejectsScanReadError() throws {
+        let root = try Self.makeOwnedFixtureRoot(testName: "scanerr-root")
+        defer { Self.cleanupFixtureDirectory(root) }
+        let sessionName = "scanerr-session"
+        let scanAdapter = MockFaultInjectingFileAdapter()
+        scanAdapter.scanUsageHandler = { _, _ in
+            throw DiagnosticDiskSinkError.ioError(operation: .directoryCheck, errno: EIO, message: "injected read failure")
+        }
+
+        do {
+            _ = try DiagnosticDiskSink(rootDirectoryURL: root, sessionName: sessionName, fileAdapter: scanAdapter)
+            Issue.record("Expected admission to reject a scan read error")
+        } catch let DiagnosticDiskSinkError.setupFailed(primary, _) {
+            guard case .ioError = primary else {
+                Issue.record("Expected ioError as primary error, got \(primary)")
+                return
+            }
+            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(sessionName).path))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
     // MARK: - Phase T: Local Volume Check
 
     @Test("Local Volume Check: Non-local filesystem (e.g. NFS / SMB) fails closed with unsupportedFilesystem")

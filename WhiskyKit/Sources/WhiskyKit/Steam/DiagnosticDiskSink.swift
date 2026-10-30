@@ -152,6 +152,7 @@ public enum DiagnosticDiskSinkError: Error, Sendable, Equatable {
     case unsupportedFilesystem(typeName: String, flags: UInt32, message: String)
     case childVerificationFailed(reason: String)
     case storageBudgetExceeded(scannedUsage: UInt64, activeReservations: UInt64, requestedReservation: UInt64, budget: UInt64)
+    case storageScanIncomplete(reason: String)
 }
 
 // MARK: - Stream & Persistence Status
@@ -649,6 +650,11 @@ public final class POSIXDiskSinkFileAdapter: DiskSinkFileAdapter, @unchecked Sen
     }
 
     public func scanDirectoryUsage(dirFd: Int32, maxEntries: Int) throws -> UInt64 {
+        // FAIL-CLOSED CONTRACT: fully account root usage or throw. Truncation at entry
+        // caps, readdir/fstatat errors, accounting overflow, unreadable entries and
+        // structures deeper than the accounted one-level session layout are all
+        // reported; a partial total is never returned. A completed scan reflects usage
+        // at observation time under the cooperative same-login boundary.
         let dupFd = Darwin.dup(dirFd)
         guard dupFd >= 0 else {
             let err = errno
@@ -659,54 +665,125 @@ public final class POSIXDiskSinkFileAdapter: DiskSinkFileAdapter, @unchecked Sen
             _ = Darwin.close(dupFd)
             throw DiagnosticDiskSinkError.ioError(operation: .directoryCheck, errno: err, message: "fdopendir failed: \(err)")
         }
-        defer { _ = Darwin.closedir(dir) }
 
         var totalUsage: UInt64 = 0
         var entryCount = 0
+        var scanError: Error? = nil
 
-        while let entry = Darwin.readdir(dir), entryCount < maxEntries {
+        while true {
+            errno = 0
+            guard let entry = Darwin.readdir(dir) else {
+                let err = errno
+                if err != 0 {
+                    scanError = DiagnosticDiskSinkError.ioError(operation: .directoryCheck, errno: err, message: "readdir failed on root scan: \(err)")
+                }
+                break
+            }
             let name = withUnsafeBytes(of: entry.pointee.d_name) { ptr -> String in
                 guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
                 return String(cString: base)
             }
             if name == "." || name == ".." { continue }
             entryCount += 1
+            if entryCount > maxEntries {
+                scanError = DiagnosticDiskSinkError.storageScanIncomplete(reason: "Root directory entry count exceeded maxEntries \(maxEntries); usage is not fully accounted")
+                break
+            }
 
-            let dType = entry.pointee.d_type
-            if dType == DT_LNK { continue } // Skip symlinks
+            var sb = Darwin.stat()
+            guard Darwin.fstatat(dirFd, name, &sb, AT_SYMLINK_NOFOLLOW) == 0 else {
+                let err = errno
+                scanError = DiagnosticDiskSinkError.ioError(operation: .directoryCheck, errno: err, message: "fstatat failed during scan for '\(name)': \(err)")
+                break
+            }
 
-            if dType == DT_DIR {
+            if (sb.st_mode & S_IFMT) == S_IFDIR {
                 let subFd = Darwin.openat(dirFd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-                if subFd >= 0 {
-                    if let subDir = Darwin.fdopendir(subFd) {
-                        var subEntries = 0
-                        while let subEntry = Darwin.readdir(subDir), subEntries < 64 {
-                            let subName = withUnsafeBytes(of: subEntry.pointee.d_name) { ptr -> String in
-                                guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
-                                return String(cString: base)
-                            }
-                            if subName == "." || subName == ".." { continue }
-                            subEntries += 1
-                            if subEntry.pointee.d_type == DT_REG {
-                                var sb = Darwin.stat()
-                                if Darwin.fstatat(subFd, subName, &sb, AT_SYMLINK_NOFOLLOW) == 0 {
-                                    totalUsage = totalUsage.addingReportingOverflow(UInt64(max(0, sb.st_size))).partialValue
-                                }
-                            }
+                guard subFd >= 0 else {
+                    let err = errno
+                    scanError = DiagnosticDiskSinkError.ioError(operation: .directoryCheck, errno: err, message: "openat failed during scan for directory '\(name)': \(err)")
+                    break
+                }
+                guard let subDir = Darwin.fdopendir(subFd) else {
+                    let err = errno
+                    _ = Darwin.close(subFd)
+                    scanError = DiagnosticDiskSinkError.ioError(operation: .directoryCheck, errno: err, message: "fdopendir failed during scan for '\(name)': \(err)")
+                    break
+                }
+                var subEntries = 0
+                while true {
+                    errno = 0
+                    guard let subEntry = Darwin.readdir(subDir) else {
+                        let err = errno
+                        if err != 0 {
+                            scanError = DiagnosticDiskSinkError.ioError(operation: .directoryCheck, errno: err, message: "readdir failed scanning '\(name)': \(err)")
                         }
-                        _ = Darwin.closedir(subDir)
-                    } else {
-                        _ = Darwin.close(subFd)
+                        break
                     }
+                    let subName = withUnsafeBytes(of: subEntry.pointee.d_name) { ptr -> String in
+                        guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
+                        return String(cString: base)
+                    }
+                    if subName == "." || subName == ".." { continue }
+                    subEntries += 1
+                    if subEntries > 64 {
+                        scanError = DiagnosticDiskSinkError.storageScanIncomplete(reason: "Session directory '\(name)' exceeds 64 accounted entries; usage is not fully accounted")
+                        break
+                    }
+                    var subSb = Darwin.stat()
+                    guard Darwin.fstatat(subFd, subName, &subSb, AT_SYMLINK_NOFOLLOW) == 0 else {
+                        let err = errno
+                        scanError = DiagnosticDiskSinkError.ioError(operation: .directoryCheck, errno: err, message: "fstatat failed during scan for '\(name)/\(subName)': \(err)")
+                        break
+                    }
+                    if (subSb.st_mode & S_IFMT) == S_IFDIR {
+                        scanError = DiagnosticDiskSinkError.storageScanIncomplete(reason: "Nested directory '\(name)/\(subName)' is deeper than the accounted layout; usage is not fully accounted")
+                        break
+                    }
+                    let (subTotal, subOverflow) = totalUsage.addingReportingOverflow(UInt64(max(0, subSb.st_size)))
+                    if subOverflow {
+                        scanError = DiagnosticDiskSinkError.storageScanIncomplete(reason: "Usage accounting overflow while scanning '\(name)/\(subName)'")
+                        break
+                    }
+                    totalUsage = subTotal
+                    if scanError != nil { break }
                 }
-            } else if dType == DT_REG {
-                var sb = Darwin.stat()
-                if Darwin.fstatat(dirFd, name, &sb, AT_SYMLINK_NOFOLLOW) == 0 {
-                    totalUsage = totalUsage.addingReportingOverflow(UInt64(max(0, sb.st_size))).partialValue
+                let subCloseRc = Darwin.closedir(subDir)
+                let subCloseErrno = subCloseRc != 0 ? errno : 0
+                scanError = combineScanFailure(scanError, closeErrno: subCloseErrno, label: name)
+                if scanError != nil { break }
+            } else {
+                // Regular files, symlinks (own link size via NOFOLLOW) and other
+                // non-directory entries contribute their own size; nothing is skipped.
+                let (newTotal, overflow) = totalUsage.addingReportingOverflow(UInt64(max(0, sb.st_size)))
+                if overflow {
+                    scanError = DiagnosticDiskSinkError.storageScanIncomplete(reason: "Usage accounting overflow at root entry '\(name)'")
+                    break
                 }
+                totalUsage = newTotal
             }
         }
+
+        let dirCloseRc = Darwin.closedir(dir)
+        let dirCloseErrno = dirCloseRc != 0 ? errno : 0
+        scanError = combineScanFailure(scanError, closeErrno: dirCloseErrno, label: "root")
+        if let scanError { throw scanError }
         return totalUsage
+    }
+
+    private func combineScanFailure(_ primary: Error?, closeErrno: Int32, label: String) -> Error? {
+        guard closeErrno != 0 else { return primary }
+        let note = "additionally closedir(\(label)) failed with errno \(closeErrno)"
+        if let primary = primary {
+            if case let DiagnosticDiskSinkError.storageScanIncomplete(reason) = primary {
+                return DiagnosticDiskSinkError.storageScanIncomplete(reason: reason + "; " + note)
+            }
+            if case let DiagnosticDiskSinkError.ioError(op, code, msg, _) = primary {
+                return DiagnosticDiskSinkError.ioError(operation: op, errno: code, message: msg + "; " + note)
+            }
+            return primary
+        }
+        return DiagnosticDiskSinkError.ioError(operation: .close, errno: closeErrno, message: "closedir(\(label)) failed: \(closeErrno)")
     }
 }
 
@@ -921,8 +998,10 @@ public final class DiagnosticDiskSink {
         } catch {
             let oldFd = currentFd
             currentFd = -1
-            _ = try? fileAdapter.close(fd: oldFd)
-            throw error
+            do { try fileAdapter.close(fd: oldFd) }
+            catch { recordCleanup(error, operation: .close) }
+            let primary = error as? DiagnosticDiskSinkError ?? .ioError(operation: .directoryOpen, errno: EIO, message: "\(error)")
+            throw DiagnosticDiskSinkError.setupFailed(primary: primary, cleanupFailure: cleanupError)
         }
 
         for (index, comp) in rootComponents.enumerated() {
